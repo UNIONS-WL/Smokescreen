@@ -8,6 +8,7 @@
 [![Documentation](https://github.com/LSSTDESC/Smokescreen/actions/workflows/build_docs.yml/badge.svg?branch=main)](https://lsstdesc.org/Smokescreen/)
 [![codecov](https://codecov.io/gh/LSSTDESC/Smokescreen/graph/badge.svg?token=T3L9QM4PTT)](https://codecov.io/gh/LSSTDESC/Smokescreen)
 [![License: BSD 3-Clause](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](https://github.com/yourusername/yourrepository/blob/main/LICENSE)
+[![status](https://joss.theoj.org/papers/e878b1039a491368b19e93eb7a614e93/status.svg)](https://joss.theoj.org/papers/e878b1039a491368b19e93eb7a614e93)
 [![LSST DESC Blinding Slack](https://img.shields.io/badge/join-Slack-4A154B)](https://lsstc.slack.com/archives/CT14ZF2AH)
 
 
