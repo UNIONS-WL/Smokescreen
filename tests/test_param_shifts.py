@@ -1,144 +1,97 @@
-import pytest  # noqa  F401
-import pyccl as ccl
-from smokescreen.param_shifts import draw_flat_param_shifts
-from smokescreen.param_shifts import draw_flat_or_deterministic_param_shifts
-from smokescreen.param_shifts import draw_gaussian_param_shifts
+import numpy as np
+import pytest
+
+from smokescreen.param_shifts import (
+    draw_param_shifts,
+    draw_flat_param_shifts,
+    _normalize_seed,
+)
 
 
-# tests for draw_flat_param_shifts
-def test_single_value_shifts():
-    shift_dict = {'param1': 1, 'param2': 2}
-    seed = 123
-    result = draw_flat_param_shifts(shift_dict, seed)
-    assert isinstance(result, dict)
-    assert set(result.keys()) == set(shift_dict.keys())
-    for key, value in result.items():
-        assert -shift_dict[key] <= value <= shift_dict[key]
+# --- reproducibility & structure --------------------------------------------
+
+def test_fixed_seed_reproduces_fixed_shift():
+    shifts = {"Omega_c": 0.05, "sigma8": (-0.1, 0.1)}
+    a = draw_param_shifts(shifts, 2112)
+    b = draw_param_shifts(shifts, 2112)
+    assert a == b
+    assert set(a) == set(shifts)
 
 
-def test_tuple_value_shifts():
-    shift_dict = {'param1': (1, 2), 'param2': (2, 3)}
-    seed = 123
-    result = draw_flat_param_shifts(shift_dict, seed)
-    assert isinstance(result, dict)
-    assert set(result.keys()) == set(shift_dict.keys())
-    for key, value in result.items():
-        assert -shift_dict[key][0] <= value <= shift_dict[key][1]
+def test_key_order_independence():
+    forward = {"Omega_c": 0.05, "sigma8": 0.1, "h": (-0.02, 0.03)}
+    reversed_dict = {"h": (-0.02, 0.03), "sigma8": 0.1, "Omega_c": 0.05}
+    a = draw_param_shifts(forward, 2112)
+    b = draw_param_shifts(reversed_dict, 2112)
+    assert a == b  # per-key deltas identical regardless of insertion order
 
 
-def test_string_seed():
-    shift_dict = {'param1': 1, 'param2': 2}
-    seed = 'random_seed'
-    result = draw_flat_param_shifts(shift_dict, seed)
-    assert isinstance(result, dict)
-    assert set(result.keys()) == set(shift_dict.keys())
-    for key, value in result.items():
-        assert -shift_dict[key] <= value <= shift_dict[key]
+def test_draw_does_not_perturb_global_np_random():
+    shifts = {"Omega_c": 0.05, "sigma8": 0.1}
+    np.random.seed(0)
+    a = np.random.random()
+    np.random.seed(0)
+    draw_param_shifts(shifts, 2112)
+    b = np.random.random()
+    assert a == b  # local RNG never touched the global state
 
 
-# tests for draw_flat_or_deterministic_param_shifts
-def test_draw_flat_or_deterministic_param_shifts_deterministic():
-    cosmo = ccl.CosmologyVanillaLCDM()
-    shifts_dict = {"Omega_c": 0.01, "sigma8": 0.02}
-    seed = 1234
+# --- delta semantics --------------------------------------------------------
 
-    shifts = draw_flat_or_deterministic_param_shifts(cosmo, shifts_dict, seed)
-
-    assert shifts["Omega_c"] == 0.01
-    assert shifts["sigma8"] == 0.02
+def test_flat_float_is_delta_within_symmetric_envelope():
+    h = 0.05
+    shifts = {"Omega_c": h}
+    for seed in range(20):
+        delta = draw_param_shifts(shifts, seed)["Omega_c"]
+        assert -h <= delta <= h
 
 
-def test_draw_flat_or_deterministic_param_shifts_flat():
-    cosmo = ccl.CosmologyVanillaLCDM()
-    shifts_dict = {"Omega_c": (0.01, 0.02), "sigma8": (0.02, 0.03)}
-    seed = 1234
-
-    shifts = draw_flat_or_deterministic_param_shifts(cosmo, shifts_dict, seed)
-
-    assert 0.01 <= shifts["Omega_c"] <= 0.02
-    assert 0.02 <= shifts["sigma8"] <= 0.03
+def test_flat_tuple_is_delta_within_box():
+    lo, hi = -0.03, 0.07
+    shifts = {"Omega_c": (lo, hi)}
+    for seed in range(20):
+        delta = draw_param_shifts(shifts, seed)["Omega_c"]
+        assert lo <= delta <= hi
 
 
-def test_draw_flat_or_deterministic_param_shifts_invalid_key():
-    cosmo = ccl.CosmologyVanillaLCDM()
-    shifts_dict = {"invalid_param": 0.01}
-    seed = 1234
+# --- seed normalization -----------------------------------------------------
 
-    with pytest.raises(ValueError, match=r"Key invalid_param not in cosmology parameters"):
-        draw_flat_or_deterministic_param_shifts(cosmo, shifts_dict, seed)
-
-
-def test_draw_flat_or_deterministic_param_shifts_invalid_tuple_length():
-    cosmo = ccl.CosmologyVanillaLCDM()
-    shifts_dict = {"Omega_c": (0.01, 0.02, 0.03)}
-    seed = 1234
-
-    with pytest.raises(ValueError, match=r"Tuple \(0.01, 0.02, 0.03\) has to be of length 2"):
-        draw_flat_or_deterministic_param_shifts(cosmo, shifts_dict, seed)
+def test_string_seed_matches_normalized_int():
+    shifts = {"Omega_c": 0.05, "sigma8": (-0.1, 0.1)}
+    str_seed = "my_secret_seed"
+    int_seed = _normalize_seed(str_seed)
+    assert draw_param_shifts(shifts, str_seed) == draw_param_shifts(shifts, int_seed)
 
 
-def test_draw_flat_or_deterministic_param_shifts_string_seed():
-    cosmo = ccl.CosmologyVanillaLCDM()
-    shifts_dict = {"Omega_c": (0.01, 0.02), "sigma8": (0.02, 0.03)}
-    seed = "1234"
+# --- distributions ----------------------------------------------------------
 
-    shifts = draw_flat_or_deterministic_param_shifts(cosmo, shifts_dict, seed)
-
-    assert 0.01 <= shifts["Omega_c"] <= 0.02
-    assert 0.02 <= shifts["sigma8"] <= 0.03
+def test_gaussian_float():
+    shifts = {"Omega_c": 0.05}
+    result = draw_param_shifts(shifts, 2112, shift_distr="gaussian")
+    assert isinstance(result["Omega_c"], float)
 
 
-# tests for draw_gaussian_param_shifts
-def test_draw_gaussian_param_shifts_single_value():
-    cosmo = ccl.CosmologyVanillaLCDM()
-    shifts_dict = {"Omega_c": (0.3, 0.01), "sigma8": (0.8, 0.02)}
-    seed = 1234
-
-    shifts = draw_gaussian_param_shifts(cosmo, shifts_dict, seed)
-
-    assert isinstance(shifts, dict)
-    assert set(shifts.keys()) == set(shifts_dict.keys())
-    for key, value in shifts.items():
-        mean, std = shifts_dict[key]
-        assert mean - 3 * std <= value <= mean + 3 * std
+def test_gaussian_tuple_raises():
+    shifts = {"Omega_c": (-0.05, 0.05)}
+    with pytest.raises(ValueError):
+        draw_param_shifts(shifts, 2112, shift_distr="gaussian")
 
 
-def test_draw_gaussian_param_shifts_invalid_key():
-    cosmo = ccl.CosmologyVanillaLCDM()
-    shifts_dict = {"invalid_param": (0.3, 0.01)}
-    seed = 1234
-
-    with pytest.raises(ValueError, match=r"Key invalid_param not in cosmology parameters"):
-        draw_gaussian_param_shifts(cosmo, shifts_dict, seed)
+def test_flat_tuple_wrong_length_raises():
+    shifts = {"Omega_c": (0.0, 0.05, 0.1)}
+    with pytest.raises(ValueError):
+        draw_param_shifts(shifts, 2112)
 
 
-def test_draw_gaussian_param_shifts_invalid_tuple_length():
-    cosmo = ccl.CosmologyVanillaLCDM()
-    shifts_dict = {"Omega_c": (0.3, 0.01, 0.02)}
-    seed = 1234
-
-    with pytest.raises(ValueError, match=r"Tuple \(0.3, 0.01, 0.02\) has to be of length 2"):
-        draw_gaussian_param_shifts(cosmo, shifts_dict, seed)
+def test_unknown_distribution_raises():
+    with pytest.raises(NotImplementedError):
+        draw_param_shifts({"Omega_c": 0.05}, 2112, shift_distr="lorentzian")
 
 
-def test_draw_gaussian_param_shifts_non_tuple_value():
-    cosmo = ccl.CosmologyVanillaLCDM()
-    shifts_dict = {"Omega_c": 0.3}
-    seed = 1234
+# --- back-compat alias ------------------------------------------------------
 
-    with pytest.raises(ValueError, match=r"Value 0.3 has to be a tuple of length 2"):
-        draw_gaussian_param_shifts(cosmo, shifts_dict, seed)
-
-
-def test_draw_gaussian_param_shifts_string_seed():
-    cosmo = ccl.CosmologyVanillaLCDM()
-    shifts_dict = {"Omega_c": (0.3, 0.01), "sigma8": (0.8, 0.02)}
-    seed = "1234"
-
-    shifts = draw_gaussian_param_shifts(cosmo, shifts_dict, seed)
-
-    assert isinstance(shifts, dict)
-    assert set(shifts.keys()) == set(shifts_dict.keys())
-    for key, value in shifts.items():
-        mean, std = shifts_dict[key]
-        assert mean - 3 * std <= value <= mean + 3 * std
+def test_draw_flat_param_shifts_alias():
+    shifts = {"Omega_c": 0.05, "sigma8": (-0.1, 0.1)}
+    assert draw_flat_param_shifts(shifts, 2112) == draw_param_shifts(
+        shifts, 2112, shift_distr="flat"
+    )

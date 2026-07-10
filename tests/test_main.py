@@ -2,163 +2,92 @@ import pytest  # noqa: F401
 import os
 from unittest.mock import patch, MagicMock
 from cryptography.fernet import Fernet
-from pyccl import CosmologyVanillaLCDM
-from smokescreen.utils import load_cosmology_from_partial_dict
 from smokescreen import __main__
 from smokescreen.__main__ import encrypt_main, decrypt_main
 
 
-@patch('builtins.print')
+FIDUCIAL = {"sigma8": 0.8, "Omega_c": 0.25, "Omega_b": 0.05, "h": 0.67, "n_s": 0.96}
+SHIFTS = {"Omega_c": (-0.1, 0.2), "sigma8": (-0.1, 0.1)}
+
+
+@patch('smokescreen.__main__.encrypt_file')
 @patch('smokescreen.__main__.ConcealDataVector')
 @patch('smokescreen.__main__.load_sacc_file')
-def test_main(mock_load_sacc, mock_smokescreen, mock_print):
-    # Arrange
+def test_datavector_main(mock_load_sacc, mock_smokescreen, mock_encrypt, mock_print=None):
     path_to_sacc = "./examples/cosmic_shear/cosmicshear_sacc.fits"
-    likelihood_path = "./tests/test_data/mock_likelihood.py"
-    systematics = {}
-    shifts_dict = {"Omega_c": [-0.1, 0.2], "sigma8": [-0.1, 0.1]}
+    seed = 2112
     shift_type = 'add'
     shift_distribution = 'flat'
-    seed = 2112
-    reference_cosmology = CosmologyVanillaLCDM()
     path_to_output = "./tests/test_data/"
-    keep_original_sacc = True
 
-    mock_smokescreen_instance = MagicMock()
-    mock_smokescreen.return_value = mock_smokescreen_instance
-
-    sacc_file = MagicMock()  # Create a mock sacc_file
-    mock_load_sacc.return_value = (sacc_file, 'fits')  # Make load_sacc return tuple of (sacc, format)
-
-    # Act
-    __main__.datavector_main(path_to_sacc, likelihood_path, shifts_dict, systematics,
-                             shift_type, shift_distribution, seed, reference_cosmology,
-                             path_to_output, keep_original_sacc)
-
-    # Assert
-    mock_load_sacc.assert_called_once_with(path_to_sacc)
-    mock_smokescreen.assert_called_once_with(reference_cosmology, likelihood_path,
-                                             shifts_dict, sacc_file, systematics, seed,
-                                             shift_distr=shift_distribution, input_format='fits')
-    mock_smokescreen_instance.calculate_concealing_factor.assert_called_once()
-    mock_smokescreen_instance.apply_concealing_to_likelihood_datavec.assert_called_once()
-    mock_smokescreen_instance.save_concealed_datavector.assert_called_once_with(
-        path_to_output, 'cosmicshear_sacc', output_format='fits', suffix=None
-    )
-
-
-@patch('builtins.print')
-@patch('smokescreen.__main__.ConcealDataVector')
-@patch('smokescreen.__main__.load_sacc_file')
-def test_main_loads_cosmology_from_dict(mock_load_sacc, mock_smokescreen, mock_print):
-    # Arrange
-    path_to_sacc = "./examples/cosmic_shear/cosmicshear_sacc.fits"
-    likelihood_path = "./tests/test_data/mock_likelihood.py"
-    systematics = {}
-    shifts_dict = {"Omega_c": [-0.1, 0.2], "sigma8": [-0.1, 0.1]}
-    shift_type = 'add'
-    shift_distribution = 'flat'
-    seed = 2112
-    reference_cosmology = {'sigma8': 0.888}
-    path_to_output = "./tests/test_data/"
-    keep_original_sacc = True
-
-    mock_smokescreen_instance = MagicMock()
-    mock_smokescreen.return_value = mock_smokescreen_instance
-
-    sacc_file = MagicMock()  # Create a mock sacc_file
-    mock_load_sacc.return_value = (sacc_file, 'fits')  # Make load_sacc return tuple of (sacc, format)
-
-    # Act
-    __main__.datavector_main(path_to_sacc, likelihood_path, shifts_dict, systematics, shift_type,
-                             shift_distribution, seed, reference_cosmology,
-                             path_to_output, keep_original_sacc)
-
-    # Assert
-    mod_ref_cosmo = load_cosmology_from_partial_dict(reference_cosmology)
-    mock_load_sacc.assert_called_once_with(path_to_sacc)
-    mock_smokescreen.assert_called_once_with(mod_ref_cosmo, likelihood_path, shifts_dict,
-                                             sacc_file, systematics, seed,
-                                             shift_distr=shift_distribution, input_format='fits')
-    mock_smokescreen_instance.calculate_concealing_factor.assert_called_once()
-    mock_smokescreen_instance.apply_concealing_to_likelihood_datavec.assert_called_once()
-    mock_smokescreen_instance.save_concealed_datavector.assert_called_once_with(
-        path_to_output, 'cosmicshear_sacc', output_format='fits', suffix=None
-    )
-
-
-@patch('builtins.print')
-@patch('smokescreen.__main__.ConcealDataVector')
-@patch('smokescreen.__main__.load_sacc_file')
-def test_main_gaussian_shift(mock_load_sacc, mock_smokescreen, mock_print):
-    # Arrange
-    path_to_sacc = "./examples/cosmic_shear/cosmicshear_sacc.fits"
-    likelihood_path = "./tests/test_data/mock_likelihood.py"
-    systematics = {}
-    shifts_dict = {"Omega_c": [-0.1, 0.2], "sigma8": [-0.1, 0.1]}
-    shift_type = 'add'
-    shift_distribution = 'gaussian'
-    seed = 2112
-    reference_cosmology = CosmologyVanillaLCDM()
-    path_to_output = "./tests/test_data/"
-    keep_original_sacc = True
-
-    mock_smokescreen_instance = MagicMock()
-    mock_smokescreen.return_value = mock_smokescreen_instance
-
-    sacc_file = MagicMock()  # Create a mock sacc_file
-    mock_load_sacc.return_value = (sacc_file, 'fits')  # Make load_sacc return tuple of (sacc, format)
-
-    # Act
-    __main__.datavector_main(path_to_sacc, likelihood_path, shifts_dict,
-                             systematics, shift_type, shift_distribution, seed,
-                             reference_cosmology,
-                             path_to_output, keep_original_sacc)
-
-    # Assert
-    mock_load_sacc.assert_called_once_with(path_to_sacc)
-    mock_smokescreen.assert_called_once_with(reference_cosmology,
-                                             likelihood_path, shifts_dict, sacc_file,
-                                             systematics, seed,
-                                             shift_distr=shift_distribution, input_format='fits')
-    mock_smokescreen_instance.calculate_concealing_factor.assert_called_once()
-    mock_smokescreen_instance.apply_concealing_to_likelihood_datavec.assert_called_once()
-    mock_smokescreen_instance.save_concealed_datavector.assert_called_once_with(
-        path_to_output, 'cosmicshear_sacc', output_format='fits', suffix=None
-    )
-
-
-@patch('builtins.print')
-@patch('smokescreen.__main__.ConcealDataVector')
-@patch('smokescreen.__main__.load_sacc_file')
-def test_datavector_main_custom_suffix(mock_load_sacc, mock_smokescreen, mock_print):
-    # Arrange
-    path_to_sacc = "./examples/cosmic_shear/cosmicshear_sacc.fits"
-    likelihood_path = "./tests/test_data/mock_likelihood.py"
-    systematics = {}
-    shifts_dict = {"Omega_c": [-0.1, 0.2], "sigma8": [-0.1, 0.1]}
-    shift_type = 'add'
-    shift_distribution = 'flat'
-    seed = 2112
-    reference_cosmology = CosmologyVanillaLCDM()
-    path_to_output = "./tests/test_data/"
-    keep_original_sacc = True
-    output_suffix = "my_suffix"
-
-    mock_smokescreen_instance = MagicMock()
-    mock_smokescreen.return_value = mock_smokescreen_instance
-
+    mock_smoke_inst = MagicMock()
+    mock_smokescreen.return_value = mock_smoke_inst
     sacc_file = MagicMock()
     mock_load_sacc.return_value = (sacc_file, 'fits')
+    mock_encrypt.return_value = (b'enc', b'key')
 
-    # Act
-    __main__.datavector_main(path_to_sacc, likelihood_path, shifts_dict, systematics,
-                             shift_type, shift_distribution, seed, reference_cosmology,
-                             path_to_output, keep_original_sacc,
-                             output_suffix=output_suffix)
+    with patch('os.path.exists', return_value=True), patch('builtins.print'):
+        __main__.datavector_main(path_to_sacc, FIDUCIAL, SHIFTS, seed,
+                                 shift_type, shift_distribution,
+                                 path_to_output, keep_original_sacc=True)
 
-    # Assert
-    mock_smokescreen_instance.save_concealed_datavector.assert_called_once_with(
+    mock_load_sacc.assert_called_once_with(path_to_sacc)
+    mock_smokescreen.assert_called_once_with(
+        FIDUCIAL, SHIFTS, sacc_file, seed=seed,
+        shift_distr=shift_distribution, input_format='fits')
+    mock_smoke_inst.calculate_concealing_factor.assert_called_once()
+    mock_smoke_inst.apply_concealing_to_likelihood_datavec.assert_called_once()
+    mock_smoke_inst.save_concealed_datavector.assert_called_once_with(
+        path_to_output, 'cosmicshear_sacc', output_format='fits', suffix=None
+    )
+
+
+@patch('smokescreen.__main__.encrypt_file')
+@patch('smokescreen.__main__.ConcealDataVector')
+@patch('smokescreen.__main__.load_sacc_file')
+def test_datavector_main_gaussian_shift(mock_load_sacc, mock_smokescreen, mock_encrypt):
+    path_to_sacc = "./examples/cosmic_shear/cosmicshear_sacc.fits"
+    seed = 2112
+    path_to_output = "./tests/test_data/"
+
+    mock_smoke_inst = MagicMock()
+    mock_smokescreen.return_value = mock_smoke_inst
+    sacc_file = MagicMock()
+    mock_load_sacc.return_value = (sacc_file, 'fits')
+    mock_encrypt.return_value = (b'enc', b'key')
+
+    with patch('os.path.exists', return_value=True), patch('builtins.print'):
+        __main__.datavector_main(path_to_sacc, FIDUCIAL, SHIFTS, seed,
+                                 shift_type='add', shift_distribution='gaussian',
+                                 path_to_output=path_to_output, keep_original_sacc=True)
+
+    mock_smokescreen.assert_called_once_with(
+        FIDUCIAL, SHIFTS, sacc_file, seed=seed,
+        shift_distr='gaussian', input_format='fits')
+
+
+@patch('smokescreen.__main__.encrypt_file')
+@patch('smokescreen.__main__.ConcealDataVector')
+@patch('smokescreen.__main__.load_sacc_file')
+def test_datavector_main_custom_suffix(mock_load_sacc, mock_smokescreen, mock_encrypt):
+    path_to_sacc = "./examples/cosmic_shear/cosmicshear_sacc.fits"
+    seed = 2112
+    path_to_output = "./tests/test_data/"
+
+    mock_smoke_inst = MagicMock()
+    mock_smokescreen.return_value = mock_smoke_inst
+    sacc_file = MagicMock()
+    mock_load_sacc.return_value = (sacc_file, 'fits')
+    mock_encrypt.return_value = (b'enc', b'key')
+
+    with patch('os.path.exists', return_value=True), patch('builtins.print'):
+        __main__.datavector_main(path_to_sacc, FIDUCIAL, SHIFTS, seed,
+                                 shift_type='add', shift_distribution='flat',
+                                 path_to_output=path_to_output,
+                                 keep_original_sacc=True,
+                                 output_suffix="my_suffix")
+
+    mock_smoke_inst.save_concealed_datavector.assert_called_once_with(
         path_to_output, 'cosmicshear_sacc', output_format='fits', suffix="my_suffix"
     )
 
