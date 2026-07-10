@@ -7,12 +7,7 @@ Thank you for your interest in contributing to Smokescreen! We welcome contribut
 1. **Fork the repository** and clone it locally.
 2. **Install the development dependencies**:
    ```bash
-   pip install -e ".[dev]"
-   ```
-or 
-   ```bash
-   conda env create -f environment.yml
-   conda activate desc_smokescreen
+   pip install -e ".[test]"
    ```
 3. **Create a branch** for your changes:
    ```bash

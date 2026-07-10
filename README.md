@@ -24,15 +24,29 @@ This repository (under development) contains the modules for data concealment (b
 
 **You can find the documentation for Smokescreen [here](https://lsstdesc.org/Smokescreen/).**
 
-## Quick Installation
-You can install Smokescreen using conda:
+> **Note:** this is the [UNIONS-WL](https://github.com/UNIONS-WL) fork of
+> [LSSTDESC/Smokescreen](https://github.com/LSSTDESC/Smokescreen). It ships a
+> `theory_fn(cosmo_params) -> np.ndarray` theory-backend protocol; the built-in
+> CCL backend is the default and supported theory path. The firecrown
+> integration path is inherited from upstream and unsupported in this fork:
+> not installed, not tested, not maintained.
+
+## Installation
+The single supported install path is pip, pinned at a release tag:
 ```bash
-conda install -c conda-forge lsstdesc-smokescreen
+pip install git+https://github.com/UNIONS-WL/Smokescreen@<tag>
+```
+
+This resolves the full runtime closure — including `pyccl` for the default CCL
+backend — with no conda environment and no PyPI package. To provision the test
+tooling as well, install the `[test]` extra:
+```bash
+pip install "smokescreen[test] @ git+https://github.com/UNIONS-WL/Smokescreen@<tag>"
 ```
 
 For developer installation or other instructions check the [documentation](https://lsstdesc.org/Smokescreen/installation.html).
 
-For questions contact @arthurmloureiro, @jessmuir, or @jablazek
+For questions about the upstream package contact @arthurmloureiro, @jessmuir, or @jablazek
 
 ---
 
