@@ -3,103 +3,84 @@ import getpass
 from typing import Union, Dict, Tuple
 from jsonargparse import CLI
 from jsonargparse.typing import Path_drw, Path_fr
-from pyccl import Cosmology as CosmologyType
-import pyccl as ccl
 # warnings related to sacc files
 import warnings
 from smokescreen import ConcealDataVector
 from smokescreen.encryption import encrypt_file, decrypt_file
-from smokescreen.utils import load_cosmology_from_partial_dict, load_sacc_file
+from smokescreen.utils import load_sacc_file
 from . import __version__
 warnings.filterwarnings("ignore")
 
 # banner to be printed in the terminal
 banner = rf"""
 
- (                                                          
- )\ )                 )                                     
-(()/(    )         ( /(    (          (      (    (         
- /(_))  (      (   )\())  ))\ (    (  )(    ))\  ))\  (     
-(_))    )\  '  )\ ((_)\  /((_))\   )\(()\  /((_)/((_) )\ )  
-/ __| _((_))  ((_)| |(_)(_)) ((_) ((_)((_)(_)) (_))  _(_/(  
-\__ \| '  \()/ _ \| / / / -_)(_-</ _|| '_|/ -_)/ -_)| ' \)) 
-|___/|_|_|_| \___/|_\_\ \___|/__/\__||_|  \___|\___||_||_|  
-                                                            
+ (
+ )\ )                 )
+(()/(    )         ( /(    (          (      (    (
+ /(_))  (      (   )\())  ))\ (    (  )(    ))\  ))\  (
+(_))    )\  '  )\ ((_)\  /((_))\   )\(()\  /((_)/((_) )\ )
+/ __| _((_))  ((_)| |(_)(_)) ((_) ((_)((_)(_)) (_))  _(_/(
+\__ \| '  \()/ _ \| / / / -_)(_-</ _|| '_|/ -_)/ -_)| ' \))
+|___/|_|_|_| \___/|_\_\ \___|/__/\__||_|  \___|\___||_||_|
+
  - DESC Pipeline for Concealing your Cosmology Results -
                  Version {__version__}
 """
 
 
 def datavector_main(path_to_sacc: Path_fr,
-                    likelihood_path: str,
+                    fiducial_params: Dict[str, float],
                     shifts_dict: Dict[str, Union[float, Tuple[float, float]]],
-                    systematics: dict = None,
+                    seed: Union[int, str],
                     shift_type: str = 'add',
                     shift_distribution: str = 'flat',
-                    seed: Union[int, str] = 2112,
-                    # Note: dict must come first in Union for jsonargparse to correctly
-                    # parse partial cosmology dictionaries without trying to instantiate Cosmology
-                    reference_cosmology: Union[dict, CosmologyType] = ccl.CosmologyVanillaLCDM(),
                     path_to_output: Path_drw = None,
                     keep_original_sacc: bool = False,
                     output_suffix: str = None,
                     ) -> None:
-    r"""Main function to conceal a SACC file using a firecrown likelihood.
+    r"""Conceal a cosmic-shear SACC file with the default CCL theory backend.
 
     Args:
-        path_to_sacc (str): Path to the sacc file to blind.
-        likelihood_path (str): Path to the firecrown likelihood module file.
-        shifts_dict (dict): Dictionary with fixed values for the firecrown shifts parameters.
-            Example: {"Omega_c": (0.20, 0.39), "sigma8": (0.70, 0.90)}
-        shift_type (str): Type of shift to apply to the data vector.
-            Options are 'add' and 'mult'. Defaults to 'add'.
-        systematics (dict): Dictionary with fixed values for the firecrown systematics parameters.
-        shift_distribution (str): Distribution type for the parameter shifts.
-            Options are 'flat' and 'gaussian'. Defaults to 'flat'.
-        seed (int, str): Seed for the blinding process. Defaults to 2112.
-        reference_cosmology (Union[CosmologyType, dict]):
-            Cosmology object or dictionary with cosmological
-            parameters you want different than the VanillaLCDM as reference cosmology.
-            Defaults to ccl.CosmologyVanillaLCDM().
-        path_to_output (str): Path to save the blinded sacc file. Defaults to None.
-        keep_original_sacc (bool): If True, keeps the original sacc file.
-            Defaults to False [keeps only the encrypted file].
+        path_to_sacc (str): Path to the SACC file to blind. It must contain
+            exactly the cosmic-shear rows the default CCL backend models
+            (galaxy_shear_cl_ee and/or galaxy_shear_xi_plus/minus), with
+            weak-lensing tracers carrying n(z).
+        fiducial_params (dict): Fiducial cosmological parameters (CCL-native
+            names, e.g. {"sigma8": 0.8, "Omega_c": 0.25, "Omega_b": 0.05,
+            "h": 0.67, "n_s": 0.96}).
+        shifts_dict (dict): Shift envelopes, interpreted as deltas about zero.
+            Example: {"Omega_c": (-0.05, 0.05), "sigma8": 0.05}
+        seed (int, str): Seed for the blinding process (no default; must be a
+            deliberate, secret choice).
+        shift_type (str): Concealing factor type, 'add' or 'mult'. Default 'add'.
+        shift_distribution (str): 'flat' or 'gaussian'. Default 'flat'.
+        path_to_output (str): Directory to save the blinded SACC. Default None
+            (uses the input file's directory).
+        keep_original_sacc (bool): If True, keeps the original SACC file.
+            Default False (keeps only the encrypted file).
         output_suffix (str): Custom suffix for the output file name.
-            Defaults to None (uses 'concealed_data_vector').
     """
     print(banner)
-    if isinstance(reference_cosmology, dict):
-        cosmo = load_cosmology_from_partial_dict(reference_cosmology)
-    else:
-        cosmo = reference_cosmology
-    # tests if the sacc file exists
     assert os.path.exists(path_to_sacc), f"File {path_to_sacc} does not exist."
-    assert os.path.exists(likelihood_path), f"File {likelihood_path} does not exist."
     # reads the sacc file (returns sacc object and detected format)
     sacc_data, input_format = load_sacc_file(path_to_sacc)
-    # creates the smokescreen object
-    smoke = ConcealDataVector(cosmo,  likelihood_path, shifts_dict, sacc_data, systematics, seed,
-                              shift_distr=shift_distribution, input_format=input_format)
+    # creates the smokescreen object with the default CCL backend
+    smoke = ConcealDataVector(fiducial_params, shifts_dict, sacc_data,
+                              seed=seed, shift_distr=shift_distribution,
+                              input_format=input_format)
     # blinds the sacc file
     smoke.calculate_concealing_factor(factor_type=shift_type)
-    # applies the blinding factor to the sacc file
     smoke.apply_concealing_to_likelihood_datavec()
     print(f">> User {getpass.getuser()}",
           f"used Smokescreen on {path_to_sacc} ... it is super effective!")
     # get root name of the input file
     root_name = os.path.splitext(os.path.basename(path_to_sacc))[0]
     # saves the blinded sacc file
-    if path_to_output is not None:
-        smoke.save_concealed_datavector(path_to_output, root_name,
-                                        output_format=input_format,
-                                        suffix=output_suffix)
-    else:
-        # get the input file directory
+    if path_to_output is None:
         path_to_output = os.path.dirname(path_to_sacc)
-        smoke.save_concealed_datavector(path_to_output, root_name,
-                                        output_format=input_format,
-                                        suffix=output_suffix)
-    # Determine extension based on format
+    smoke.save_concealed_datavector(path_to_output, root_name,
+                                    output_format=input_format,
+                                    suffix=output_suffix)
     ext = '.hdf5' if input_format == 'hdf5' else '.fits'
     _suffix = output_suffix if output_suffix is not None else "concealed_data_vector"
     outprintfile = f"{path_to_output}/{root_name}_{_suffix}{ext}"

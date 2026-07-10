@@ -20,8 +20,6 @@ Smokescreen Utils
 '''
 import hashlib
 import importlib.util
-import pyccl as ccl
-import sacc
 
 
 def load_cosmology_from_partial_dict(cosmo_dict):
@@ -39,6 +37,8 @@ def load_cosmology_from_partial_dict(cosmo_dict):
     Cosmology
         Cosmology object with the specified parameters.
     """
+    import pyccl as ccl
+
     # sets the default values for the cosmological parameters
     cosmo_dict_default = ccl.CosmologyVanillaLCDM().to_dict()
 
@@ -116,34 +116,7 @@ def string_to_seed(seedstring):
     return int(int(hashlib.md5(seedstring.encode('utf-8')).hexdigest(), 16) % 1.e8)
 
 
-def modify_default_params(default_params, ccl_cosmology, systematics=None):
-    """
-    Modify the default parameters with the values from the CCL cosmology and
-    systematics if provided.
-
-    Parameters
-    ----------
-    default_params : dict
-        Dictionary with the default parameters.
-    ccl_cosmology : dict
-        Dictionary with the CCL cosmology parameters.
-    systematics : dict, optional
-        Dictionary with the systematics parameters to override the defaults.
-
-    Returns
-    -------
-    dict
-        Dictionary with the modified default parameters.
-    """
-    for key, value in default_params.items():
-        if key in ccl_cosmology:
-            default_params[key] = ccl_cosmology[key]
-        elif systematics is not None and key in systematics:
-            default_params[key] = systematics[key]
-    return default_params
-
-
-def load_sacc_file(path_to_sacc: str) -> tuple[sacc.Sacc, str]:
+def load_sacc_file(path_to_sacc: str):
     """
     Load a SACC file, automatically detecting if it's FITS or HDF5 format.
 
@@ -166,6 +139,8 @@ def load_sacc_file(path_to_sacc: str) -> tuple[sacc.Sacc, str]:
     ValueError
         If the file cannot be loaded as either format
     """
+    import sacc
+
     # Try HDF5 first (more specific format check)
     try:
         sacc_obj = sacc.Sacc.load_hdf5(path_to_sacc)
