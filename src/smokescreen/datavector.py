@@ -84,6 +84,15 @@ class ConcealDataVector():
 
         self.fiducial_params = dict(fiducial_params)
         self.shifts_dict = shifts_dict
+
+        # every shifted parameter must exist at the fiducial point
+        unknown = set(shifts_dict) - set(self.fiducial_params)
+        if unknown:
+            raise ValueError(
+                f"shifts_dict keys {sorted(unknown)} are not keys of "
+                f"fiducial_params {sorted(self.fiducial_params)}; every "
+                f"shifted parameter must have a fiducial value."
+            )
         self.sacc_data = sacc_data
         self.seed = seed
         self.shift_distr = shift_distr
@@ -108,18 +117,23 @@ class ConcealDataVector():
                                           shift_distr=shift_distr)
         self.__concealed_params = self._overlay_shifts(self.__shifts)
 
-        # length guard: theory vector must align to the SACC rows
-        self.theory_vec_fid = np.asarray(self.theory_fn(self.fiducial_params))
-        if len(self.theory_vec_fid) != len(self.sacc_data.mean):
-            raise ValueError(
-                f"theory_fn returned {len(self.theory_vec_fid)} elements but "
-                f"sacc_data.mean has {len(self.sacc_data.mean)}; the SACC must "
-                f"contain exactly the rows theory_fn returns."
-            )
+        # shape guard: theory vector must align to the SACC rows
+        self.theory_vec_fid = self._checked_theory_vec(self.fiducial_params)
 
         if self._debug:
             print(f"[DEBUG] Shifts: {self.__shifts}")
             print(f"[DEBUG] Concealed params: {self.__concealed_params}")
+
+    def _checked_theory_vec(self, params):
+        """Evaluate theory_fn and enforce a 1-D vector aligned to sacc_data.mean."""
+        vec = np.asarray(self.theory_fn(params))
+        if vec.shape != np.shape(self.sacc_data.mean):
+            raise ValueError(
+                f"theory_fn returned shape {vec.shape} but sacc_data.mean has "
+                f"shape {np.shape(self.sacc_data.mean)}; theory_fn must return "
+                f"a 1-D vector aligned to the SACC rows."
+            )
+        return vec
 
     def _overlay_shifts(self, shifts):
         """Overlay drawn deltas on the fiducial point: fiducial[k] + shift[k]."""
@@ -152,9 +166,9 @@ class ConcealDataVector():
         """
         self.factor_type = factor_type
 
-        # fiducial vector computed once in __init__ (length guard); recompute
+        # fiducial vector computed once in __init__ (shape guard); recompute
         # nothing there --- reuse it and evaluate only the hidden point here.
-        self.theory_vec_conceal = np.asarray(self.theory_fn(self.__concealed_params))
+        self.theory_vec_conceal = self._checked_theory_vec(self.__concealed_params)
 
         if factor_type == "add":
             self.__concealing_factor = self.theory_vec_conceal - self.theory_vec_fid

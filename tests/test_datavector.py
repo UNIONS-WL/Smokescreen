@@ -61,6 +61,27 @@ def test_length_guard_raises(sacc_data):
         ConcealDataVector(FIDUCIAL, SHIFTS, sacc_data, seed=SEED, theory_fn=wrong)
 
 
+def test_shape_guard_rejects_column_vector(sacc_data):
+    # (n, 1) has len() == n but would broadcast mean(n,) + factor(n,1) into an
+    # (n, n) matrix — must be rejected, not silently corrupt the blinded SACC
+    wrong = lambda p: np.ones((5, 1))  # noqa: E731
+    with pytest.raises(ValueError, match="shape"):
+        ConcealDataVector(FIDUCIAL, SHIFTS, sacc_data, seed=SEED, theory_fn=wrong)
+
+
+def test_unknown_shift_key_raises(sacc_data, theory_fn):
+    # a typo'd shift key must fail loudly at construction
+    with pytest.raises(ValueError, match="omega_c"):
+        ConcealDataVector(FIDUCIAL, {"omega_c": 0.05}, sacc_data,
+                          seed=SEED, theory_fn=theory_fn)
+
+
+def test_seed_is_required(sacc_data, theory_fn):
+    # custody contract: no default seed — omitting it must be a TypeError
+    with pytest.raises(TypeError):
+        ConcealDataVector(FIDUCIAL, SHIFTS, sacc_data, theory_fn=theory_fn)
+
+
 # --- concealing factor (add) bit-for-bit ------------------------------------
 
 def test_concealing_factor_add_bit_for_bit(sacc_data, theory_fn):
@@ -175,18 +196,22 @@ def test_end_to_end_synthetic(tmp_path, sacc_data, theory_fn, monkeypatch):
 # --- default CCL backend ----------------------------------------------------
 
 def _make_cosmic_shear_sacc():
-    """Small cosmic-shear SACC with 2 NZ tracers and xi_plus/xi_minus rows."""
+    """Small cosmic-shear SACC with 2 NZ tracers, xi± and cl_ee rows."""
     s = sacc.Sacc()
     z = np.linspace(0.05, 2.0, 50)
     for name, zmean in [("src0", 0.5), ("src1", 1.0)]:
         nz = np.exp(-0.5 * ((z - zmean) / 0.2) ** 2)
         s.add_tracer("NZ", name, z, nz)
     thetas = np.array([5.0, 20.0, 60.0, 120.0])  # arcmin
+    ells = [50, 200, 800]
     pairs = [("src0", "src0"), ("src0", "src1"), ("src1", "src1")]
     for dt in ("galaxy_shear_xi_plus", "galaxy_shear_xi_minus"):
         for p in pairs:
             for th in thetas:
                 s.add_data_point(dt, p, 1e-6, theta=th)
+    for p in pairs:
+        for ell in ells:
+            s.add_data_point("galaxy_shear_cl_ee", p, 1e-9, ell=ell)
     n = len(s.mean)
     s.add_covariance(np.eye(n) * 1e-12)
     return s
@@ -204,6 +229,9 @@ def test_default_ccl_backend(tmp_path, monkeypatch):
 
     cdv = ConcealDataVector(fiducial, shifts, s, seed=SEED, theory_fn=None)
     assert np.all(np.isfinite(cdv.theory_vec_fid))
+    # the Cl branch (np.interp over the ell grid) must produce real power
+    cl_idx = s.indices("galaxy_shear_cl_ee")
+    assert np.all(cdv.theory_vec_fid[cl_idx] > 0)
     cdv.calculate_concealing_factor(factor_type="add")
     blinded = cdv.apply_concealing_to_likelihood_datavec()
     assert not np.array_equal(blinded, s.mean)
