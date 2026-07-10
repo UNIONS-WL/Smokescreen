@@ -146,6 +146,13 @@ def load_sacc_file(path_to_sacc: str):
         sacc_obj = sacc.Sacc.load_hdf5(path_to_sacc)
         sacc_obj._smokescreen_input_format = 'hdf5'
         return sacc_obj, 'hdf5'
+    except ModuleNotFoundError as e:
+        if path_to_sacc.endswith(('.h5', '.hdf5')):
+            raise ModuleNotFoundError(
+                f"Cannot load HDF5 SACC file {path_to_sacc}: sacc's HDF5 "
+                f"support needs the optional dependency 'h5py' "
+                f"(pip install h5py). Original error: {e}"
+            ) from e
     except Exception:
         pass
 

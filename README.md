@@ -22,7 +22,7 @@ This repository (under development) contains the modules for data concealment (b
 - Posterior distribution [not yet developed]
 - (TBC) Catalogues
 
-**You can find the documentation for Smokescreen [here](https://lsstdesc.org/Smokescreen/).**
+**You can find the documentation for this fork [here](https://unions-wl.github.io/Smokescreen/)** (upstream's documentation lives at [lsstdesc.org/Smokescreen](https://lsstdesc.org/Smokescreen/); its install instructions do not apply to this fork).
 
 > **Note:** this is the [UNIONS-WL](https://github.com/UNIONS-WL) fork of
 > [LSSTDESC/Smokescreen](https://github.com/LSSTDESC/Smokescreen). It ships a
@@ -44,7 +44,7 @@ tooling as well, install the `[test]` extra:
 pip install "smokescreen[test] @ git+https://github.com/UNIONS-WL/Smokescreen@<tag>"
 ```
 
-For developer installation or other instructions check the [documentation](https://lsstdesc.org/Smokescreen/installation.html).
+For developer installation or other instructions check the [documentation](https://unions-wl.github.io/Smokescreen/installation.html).
 
 For questions about the upstream package contact @arthurmloureiro, @jessmuir, or @jablazek
 

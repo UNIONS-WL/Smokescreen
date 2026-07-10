@@ -30,6 +30,7 @@ dynamic = ["version"]
 
 [project.optional-dependencies]
 test = [
+    "h5py",
     "pytest",
     "pytest-cov",
 ]
@@ -39,12 +40,6 @@ docs = [
     "sphinxcontrib-autoprogram",
     "sphinx_rtd_theme",
 ]
-
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.flake8]
-max-line-length = 120
 
 [project.urls]
 Homepage = "https://github.com/LSSTDESC/Smokescreen"

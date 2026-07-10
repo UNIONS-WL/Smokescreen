@@ -54,6 +54,19 @@ jobs:
       - name: Test with pytest
         run: pytest --cov=smokescreen --cov-report=xml ./tests
 
+  # Lint runs independently of the test suite so a red pytest never hides
+  # a lint failure (and vice versa).
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: flake8
         uses: py-actions/flake8@v2
         with:
