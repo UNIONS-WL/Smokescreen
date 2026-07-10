@@ -35,7 +35,8 @@ def test_datavector_main(mock_load_sacc, mock_smokescreen, mock_encrypt, mock_pr
     mock_smokescreen.assert_called_once_with(
         FIDUCIAL, SHIFTS, sacc_file, seed=seed,
         shift_distr=shift_distribution, input_format='fits')
-    mock_smoke_inst.calculate_concealing_factor.assert_called_once()
+    mock_smoke_inst.calculate_concealing_factor.assert_called_once_with(
+        factor_type='add')
     mock_smoke_inst.apply_concealing_to_likelihood_datavec.assert_called_once()
     mock_smoke_inst.save_concealed_datavector.assert_called_once_with(
         path_to_output, 'cosmicshear_sacc', output_format='fits', suffix=None
