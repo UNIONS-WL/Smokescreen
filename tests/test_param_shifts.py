@@ -26,6 +26,27 @@ def test_key_order_independence():
     assert a == b  # per-key deltas identical regardless of insertion order
 
 
+def test_key_subset_independence():
+    # a key's delta depends only on (key, seed, shift_distr) — adding or
+    # removing OTHER keys must not change it (staged-blinding reproducibility)
+    full = draw_param_shifts({"sigma8": 0.05, "Omega_c": 0.03, "h": 0.01}, 42)
+    alone = draw_param_shifts({"sigma8": 0.05}, 42)
+    assert full["sigma8"] == alone["sigma8"]
+
+
+def test_golden_values():
+    # Pin the cross-run/cross-machine reproducibility contract: these exact
+    # values are how historical blinding shifts are re-derived at unblinding.
+    # Any RNG/normalization/derivation change MUST fail this test.
+    assert _normalize_seed("my_secret_seed") == 3734715429001406524
+    assert draw_param_shifts({"Omega_c": 0.05}, 2112) == {
+        "Omega_c": pytest.approx(-0.034665567512199846, abs=0, rel=1e-15)
+    }
+    assert draw_param_shifts({"Omega_c": 0.05}, 2112, shift_distr="gaussian") == {
+        "Omega_c": pytest.approx(0.008622042117174187, abs=0, rel=1e-15)
+    }
+
+
 def test_draw_does_not_perturb_global_np_random():
     shifts = {"Omega_c": 0.05, "sigma8": 0.1}
     np.random.seed(0)
@@ -54,6 +75,13 @@ def test_flat_tuple_is_delta_within_box():
         assert lo <= delta <= hi
 
 
+def test_flat_list_envelope_equivalent_to_tuple():
+    # [lo, hi] is what YAML/JSON configs naturally produce
+    as_list = draw_param_shifts({"Omega_c": [-0.03, 0.07]}, 2112)
+    as_tuple = draw_param_shifts({"Omega_c": (-0.03, 0.07)}, 2112)
+    assert as_list == as_tuple
+
+
 # --- seed normalization -----------------------------------------------------
 
 def test_string_seed_matches_normalized_int():
@@ -69,6 +97,19 @@ def test_gaussian_float():
     shifts = {"Omega_c": 0.05}
     result = draw_param_shifts(shifts, 2112, shift_distr="gaussian")
     assert isinstance(result["Omega_c"], float)
+    # gaussian must actually be a different distribution than flat
+    flat = draw_param_shifts(shifts, 2112, shift_distr="flat")
+    assert result["Omega_c"] != flat["Omega_c"]
+
+
+def test_gaussian_escapes_flat_envelope():
+    # gaussian is unbounded; flat is confined to [-h, h] — a cheap
+    # discriminator that the gaussian branch is not silently flat
+    h = 0.05
+    assert any(
+        abs(draw_param_shifts({"Omega_c": h}, s, shift_distr="gaussian")["Omega_c"]) > h
+        for s in range(200)
+    )
 
 
 def test_gaussian_tuple_raises():

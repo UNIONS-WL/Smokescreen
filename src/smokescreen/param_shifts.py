@@ -55,18 +55,21 @@ def draw_param_shifts(shifts_dict, seed, shift_distr="flat"):
     Draw a delta for each named parameter from a local RNG seeded by ``seed``.
 
     Each returned value is a shift to be *added* to the fiducial value, not an
-    absolute parameter value. The draw is order-independent: the delta for a
-    given key depends only on ``(key, seed, shift_distr)``, not on the
-    iteration order of ``shifts_dict``. This is achieved by iterating the keys
-    in sorted order and consuming exactly one scalar RNG call per key.
+    absolute parameter value. The draw is per-key independent: the delta for a
+    given key depends only on ``(key, seed, shift_distr)`` --- not on the
+    iteration order of ``shifts_dict``, and not on which *other* keys are
+    present. Each key gets its own RNG derived from ``(seed, key)``, so adding
+    or removing a parameter from the shifts envelope never changes any other
+    parameter's drawn delta.
 
     Parameters
     ----------
     shifts_dict : Mapping[str, float | tuple[float, float]]
         Mapping of parameter name to its shift envelope, interpreted as a delta
         about zero. A ``float`` ``h`` is the symmetric delta envelope
-        ``(-h, +h)``; a ``(lo, hi)`` tuple is a delta box, the drawn delta
-        lies in ``[lo, hi]`` (typically straddling zero).
+        ``(-h, +h)``; a ``(lo, hi)`` pair (tuple or list, e.g. as loaded from
+        YAML/JSON) is a delta box, the drawn delta lies in ``[lo, hi]``
+        (typically straddling zero).
     seed : int or str
         Seed for the random number generator. A ``str`` is normalized to an
         ``int`` (see :func:`_normalize_seed`).
@@ -85,25 +88,29 @@ def draw_param_shifts(shifts_dict, seed, shift_distr="flat"):
     if shift_distr not in ("flat", "gaussian"):
         raise NotImplementedError("Only flat and gaussian shifts are implemented")
 
-    rng = np.random.default_rng(_normalize_seed(seed))
+    base_seed = _normalize_seed(seed)
 
     shifts = {}
-    # Sorted iteration makes the per-key draw independent of dict order.
-    for key in sorted(shifts_dict):
-        envelope = shifts_dict[key]
+    for key, envelope in shifts_dict.items():
+        # Per-key derived RNG: the draw for a key depends only on (seed, key),
+        # never on the other keys in the mapping or on iteration order.
+        rng = np.random.default_rng([base_seed, _normalize_seed(key)])
         if shift_distr == "flat":
-            if isinstance(envelope, tuple):
+            if isinstance(envelope, (tuple, list)):
                 if len(envelope) != 2:
-                    raise ValueError(f"Tuple {envelope} has to be of length 2")
+                    raise ValueError(
+                        f"Shift envelope for {key!r} must have length 2 "
+                        f"(lo, hi); got {envelope!r}"
+                    )
                 lo, hi = envelope
             else:
                 lo, hi = -envelope, envelope
             shifts[key] = float(rng.uniform(lo, hi))
         else:  # gaussian
-            if isinstance(envelope, tuple):
+            if isinstance(envelope, (tuple, list)):
                 raise ValueError(
                     f"Gaussian shift for {key} requires a float half-width, "
-                    f"got tuple {envelope}"
+                    f"got {envelope!r}"
                 )
             shifts[key] = float(rng.normal(0.0, envelope))
     return shifts
