@@ -17,6 +17,20 @@ weak-lensing tracers' n(z) and the SACC row layout, and returns, for a given
 parameter mapping, the theory vector aligned element-for-element to
 ``sacc_data.mean``.
 
+Two conventions of this convenience backend, part of its row-to-theory
+contract (Smokescreen does not verify them):
+
+- **Transfer function / power spectrum.** It defaults to CCL's native
+  ``transfer_function="eisenstein_hu"`` and ``matter_power_spectrum="halofit"``
+  so the shipped backend runs against a bare ``pyccl`` install with no
+  Boltzmann code (CAMB/CLASS). Both are overridable through ``cosmo_params``;
+  a caller who wants a Boltzmann-code power spectrum can supply their own
+  ``theory_fn`` instead.
+- **ξ± angle units.** The SACC ``theta`` tag of ``galaxy_shear_xi_plus`` /
+  ``galaxy_shear_xi_minus`` rows is interpreted as **arcminutes** and converted
+  to degrees for :func:`pyccl.correlation`. ``galaxy_shear_cl_ee`` rows use
+  their ``ell`` tag directly.
+
 .. autofunction:: build_ccl_theory_fn
 '''
 import numpy as np
