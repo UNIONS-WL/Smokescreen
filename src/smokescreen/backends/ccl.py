@@ -2,7 +2,7 @@
 # license: BSD 3-Clause
 '''
 Default CCL cosmic-shear backend (:mod:`smokescreen.backends.ccl`)
-=================================================================
+==================================================================
 
 .. currentmodule:: smokescreen.backends.ccl
 
@@ -28,8 +28,10 @@ contract (Smokescreen does not verify them):
   ``theory_fn`` instead.
 - **ξ± angle units.** The SACC ``theta`` tag of ``galaxy_shear_xi_plus`` /
   ``galaxy_shear_xi_minus`` rows is interpreted as **arcminutes** and converted
-  to degrees for :func:`pyccl.correlation`. ``galaxy_shear_cl_ee`` rows use
-  their ``ell`` tag directly.
+  to degrees for :func:`pyccl.correlation`. ``galaxy_shear_cl_ee`` rows are
+  linearly interpolated onto their ``ell`` tag from the same internal
+  512-point log-spaced ℓ grid (2 to 30000) that feeds the real-space
+  transform; the ℓ tag is not passed to CCL directly.
 
 .. autofunction:: build_ccl_theory_fn
 '''
