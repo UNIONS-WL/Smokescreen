@@ -122,6 +122,22 @@ example a pipeline that blinds selected rows of a larger file:
 Here ``theory_fn`` is required and keyword-only: at this level there is no
 default backend, so nothing in this call path imports ``pyccl``.
 
+If you have already drawn the hidden point yourself, use
+:func:`~smokescreen.datavector.factor_from_params` instead. It is the lower
+half of the same operation --- no seed, no draw, just the two theory
+evaluations and their combination --- so the hidden point is drawn exactly
+once and the factor cannot drift from the parameters you believe produced it:
+
+.. code-block:: python
+
+   from smokescreen import factor_from_params
+   from smokescreen.param_shifts import draw_param_shifts
+
+   shifts = draw_param_shifts(shifts_dict, seed="a-high-entropy-secret")
+   concealed = {k: v + shifts.get(k, 0.0) for k, v in fiducial_params.items()}
+   factor = factor_from_params(fiducial_params, concealed,
+                               theory_fn=my_theory_fn)
+
 The default CCL backend and its SACC contract
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -146,8 +162,10 @@ Two conventions the backend assumes and does not verify:
 
 * The ``theta`` tag of ``xi_plus``/``xi_minus`` rows is read as
   **arcminutes** and converted to degrees for ``pyccl.correlation``.
-  ``galaxy_shear_cl_ee`` rows use their ``ell`` tag directly. Angular power
-  spectra are computed on a log grid spanning :math:`\ell \in [2, 30000]`.
+  Angular power spectra are computed once on an internal 512-point log-spaced
+  grid over :math:`\ell \in [2, 30000]`; ``galaxy_shear_cl_ee`` rows are
+  linearly interpolated from that grid onto their ``ell`` tag rather than
+  evaluated at it.
 
 * The cosmology defaults to ``transfer_function="eisenstein_hu"`` and
   ``matter_power_spectrum="halofit"``, so the backend runs against a bare
@@ -202,17 +220,20 @@ The following metadata is stamped:
    * - ``creator``, ``creation``, ``info``
      - Who blinded the file, when, and with what
    * - ``seed_commitment``
-     - sha256 hex digest of ``str(seed)`` --- a commitment to the seed, **not**
-       the seed
+     - sha256 hex digest of
+       :data:`~smokescreen.param_shifts.COMMITMENT_DOMAIN` followed by
+       ``str(seed)`` --- a commitment to the seed, **not** the seed
    * - ``draw_scheme``
      - The :data:`~smokescreen.param_shifts.DRAW_SCHEME` the shifts were drawn under
 
 .. warning::
    The raw seed is **not** written by default. The commitment ties the blinded
    product to the blind that produced it: a later-revealed seed either matches
-   the digest or it does not. It conceals the seed only to the extent that the
-   seed is unguessable --- a small integer is trivially brute-forced from its
-   digest, so choose a high-entropy seed. Pass ``stamp_seed=True`` to write the
+   the digest or it does not. The digest is domain-separated, so it does not
+   share a hash domain with the RNG seed derivation and cannot carry the seed
+   itself. It still conceals the seed only to the extent that the seed is
+   unguessable --- a small integer is trivially brute-forced from its digest,
+   so choose a high-entropy seed. Pass ``stamp_seed=True`` to write the
    raw seed as ``seed_smokescreen``, as upstream Smokescreen does.
 
 ``draw_scheme`` lets an unblind attempt made with an install whose draw
@@ -286,6 +307,9 @@ Encrypting files
 
    smokescreen encrypt --path_to_sacc path/to/sacc.fits \
        --path_to_save path/to/save/ [--keep_original true]
+
+``--path_to_save`` is an output directory and must already exist. It defaults
+to the directory holding the input file.
 
 This writes an ``.encrpt`` file and a ``.key`` file. From Python:
 
