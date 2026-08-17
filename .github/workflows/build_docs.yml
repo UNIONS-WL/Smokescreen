@@ -5,9 +5,6 @@ on:
       - main
       - docs
   pull_request:
-    branches:
-      - main
-      - docs
 jobs:
   build-docs:
     runs-on: ubuntu-latest
@@ -22,15 +19,10 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         python -m pip install '.[docs]'
+      # -n flags unresolvable cross-references, -W makes every warning fatal:
+      # the docs are the fork's API contract, so a broken reference is a
+      # build failure, not a line of log nobody reads.
     - name: Build Sphinx documentation
       run: |
         cd docs
-        python -m sphinx -b html source build
-    - name: Deploy
-      uses: peaceiris/actions-gh-pages@v3
-      if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/docs') }}
-      with:
-        publish_branch: gh-pages
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: docs/build/
-        force_orphan: true
+        python -m sphinx -n -W -b html source build
