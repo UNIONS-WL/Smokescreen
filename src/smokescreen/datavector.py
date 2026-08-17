@@ -34,6 +34,17 @@ import sacc
 from smokescreen.param_shifts import draw_param_shifts
 
 
+def _check_shift_keys(fiducial_params, shifts_dict):
+    """Every shifted parameter must have a fiducial value; raise if one does not."""
+    unknown = set(shifts_dict) - set(fiducial_params)
+    if unknown:
+        raise ValueError(
+            f"shifts_dict keys {sorted(unknown)} are not keys of "
+            f"fiducial_params {sorted(fiducial_params)}; every "
+            f"shifted parameter must have a fiducial value."
+        )
+
+
 class ConcealDataVector():
     """
     Conceal (blind) a measured data vector by adding a theory difference.
@@ -70,39 +81,38 @@ class ConcealDataVector():
         ``"flat"`` (uniform over the delta envelope) or ``"gaussian"``
         (zero-mean Gaussian with sigma = the ``float`` half-width). Default
         ``"flat"``.
-
-    Keyword Arguments
-    -----------------
-    input_format : str
-        Original SACC file format for output preservation ('fits' or 'hdf5').
     debug : bool
-        If True, prints debug information. Default is False.
+        If True, prints debug information and makes
+        :meth:`calculate_concealing_factor` return the factor. Default False.
+    input_format : str, optional
+        Original SACC file format for output preservation (``'fits'`` or
+        ``'hdf5'``). When ``None``, taken from the SACC object if
+        :func:`smokescreen.utils.load_sacc_file` tagged it, else ``'fits'``.
+
+    Notes
+    -----
+    The keyword arguments are spelled out rather than collected in
+    ``**kwargs``: a misspelled ``theory_fn`` would otherwise be swallowed
+    silently and fall back to the default CCL backend, blinding with one theory
+    and unblinding with another.
     """
     def __init__(self, fiducial_params, shifts_dict, sacc_data, *,
-                 seed, theory_fn=None, shift_distr="flat", **kwargs):
+                 seed, theory_fn=None, shift_distr="flat",
+                 debug=False, input_format=None):
         assert isinstance(sacc_data, sacc.sacc.Sacc), "sacc_data must be a sacc object"
 
         self.fiducial_params = dict(fiducial_params)
         self.shifts_dict = shifts_dict
-
-        # every shifted parameter must exist at the fiducial point
-        unknown = set(shifts_dict) - set(self.fiducial_params)
-        if unknown:
-            raise ValueError(
-                f"shifts_dict keys {sorted(unknown)} are not keys of "
-                f"fiducial_params {sorted(self.fiducial_params)}; every "
-                f"shifted parameter must have a fiducial value."
-            )
+        _check_shift_keys(self.fiducial_params, shifts_dict)
         self.sacc_data = sacc_data
         self.seed = seed
         self.shift_distr = shift_distr
-        self._debug = bool(kwargs.get('debug', False))
+        self._debug = bool(debug)
 
         # detect original file format for output preservation
-        self._input_format = kwargs.get(
-            'input_format',
-            getattr(sacc_data, '_smokescreen_input_format', 'fits'),
-        )
+        if input_format is None:
+            input_format = getattr(sacc_data, '_smokescreen_input_format', 'fits')
+        self._input_format = input_format
 
         # theory backend: caller-supplied, or the default CCL cosmic-shear one
         # (imported lazily so `import smokescreen` never imports pyccl).

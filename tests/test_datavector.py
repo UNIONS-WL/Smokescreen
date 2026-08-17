@@ -76,6 +76,14 @@ def test_unknown_shift_key_raises(sacc_data, theory_fn):
                           seed=SEED, theory_fn=theory_fn)
 
 
+def test_unknown_keyword_raises(sacc_data, theory_fn):
+    # a swallowed `theory_fn` typo would silently fall back to the default CCL
+    # backend — blinding with one theory and unblinding with another
+    with pytest.raises(TypeError):
+        ConcealDataVector(FIDUCIAL, SHIFTS, sacc_data, seed=SEED,
+                          theory_func=theory_fn)
+
+
 def test_seed_is_required(sacc_data, theory_fn):
     # custody contract: no default seed — omitting it must be a TypeError
     with pytest.raises(TypeError):
