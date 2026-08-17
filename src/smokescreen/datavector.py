@@ -16,6 +16,18 @@ vector aligned to the SACC rows being concealed is a valid backend. The fork
 ships a default CCL cosmic-shear backend (see
 :mod:`smokescreen.backends.ccl`); power users supply their own callable.
 
+The blinding itself is a vector operation: :func:`concealing_factor` is the
+whole of it, and it never sees a SACC. :class:`ConcealDataVector` is the SACC
+adapter over that function --- it reads the rows, applies the factor, and
+writes the blinded file. Callers that hold their own data container (a
+pipeline blinding selected rows of a larger file, say) want the function.
+
+
+Concealing Factor
+-----------------
+
+.. autofunction:: concealing_factor
+
 
 Conceal Data Vector Class
 -------------------------
@@ -45,9 +57,93 @@ def _check_shift_keys(fiducial_params, shifts_dict):
         )
 
 
+def _overlay_shifts(fiducial_params, shifts):
+    """Overlay drawn deltas on the fiducial point: ``fiducial[k] + shift[k]``."""
+    concealed = deepcopy(dict(fiducial_params))
+    for k, delta in shifts.items():
+        concealed[k] = fiducial_params[k] + delta
+    return concealed
+
+
+def concealing_factor(fiducial_params, shifts_dict, *, seed, theory_fn,
+                      shift_distr="flat", factor_type="add"):
+    r"""
+    Concealing (blinding) factor for a hidden parameter shift, per Muir et al. 2019.
+
+    The whole of the blinding operation, as a plain vector: draw the hidden
+    deltas from ``seed``, overlay them on the fiducial point, evaluate
+    ``theory_fn`` at both points, and combine the two theory vectors. No SACC
+    and no data vector enter here --- the caller adds (or multiplies) the
+    returned factor into whatever container holds its data.
+
+    Parameters
+    ----------
+    fiducial_params : Mapping[str, float]
+        The fiducial point, a plain mapping of cosmological-parameter name to
+        value. Interpreting the names is the ``theory_fn``'s job.
+    shifts_dict : Mapping[str, float | tuple[float, float]]
+        Maps a parameter name (a key of ``fiducial_params``) to its shift
+        envelope, interpreted as a *delta* about zero. See
+        :func:`smokescreen.param_shifts.draw_param_shifts`.
+    seed : int or str
+        Random seed. Keyword-only, and no default: blinding custody depends on
+        the seed being a deliberate, secret choice.
+    theory_fn : Callable[[Mapping[str, float]], np.ndarray]
+        Theory backend. Keyword-only and required --- there is no default
+        backend at this level, so nothing here imports ``pyccl``. To build the
+        shipped cosmic-shear backend from a SACC, use
+        :func:`smokescreen.backends.ccl.build_ccl_theory_fn`.
+    shift_distr : str
+        ``"flat"`` (uniform over the delta envelope) or ``"gaussian"``
+        (zero-mean Gaussian with sigma = the ``float`` half-width). Default
+        ``"flat"``.
+    factor_type : str
+        ``"add"`` (default) or ``"mult"``.
+
+    Returns
+    -------
+    np.ndarray
+        The concealing factor, in the row order ``theory_fn`` returns.
+
+    Notes
+    -----
+    factor_type="add":
+        .. math:: f^{\rm add} = t(\theta_{\rm hidden}) - t(\theta_{\rm fid})
+
+    factor_type="mult":
+        .. math:: f^{\rm mult} = t(\theta_{\rm hidden}) / t(\theta_{\rm fid})
+    """
+    if factor_type not in ("add", "mult"):
+        raise NotImplementedError('Only "add" and "mult" concealing factor is implemented')
+
+    fiducial_params = dict(fiducial_params)
+    _check_shift_keys(fiducial_params, shifts_dict)
+
+    shifts = draw_param_shifts(shifts_dict, seed, shift_distr=shift_distr)
+    concealed_params = _overlay_shifts(fiducial_params, shifts)
+
+    theory_fid = np.asarray(theory_fn(fiducial_params))
+    theory_conceal = np.asarray(theory_fn(concealed_params))
+    if theory_conceal.shape != theory_fid.shape:
+        raise ValueError(
+            f"theory_fn returned shape {theory_conceal.shape} at the hidden "
+            f"point but {theory_fid.shape} at the fiducial point; the two must "
+            f"span the same rows."
+        )
+
+    if factor_type == "add":
+        return theory_conceal - theory_fid
+    return theory_conceal / theory_fid
+
+
 class ConcealDataVector():
     """
     Conceal (blind) a measured data vector by adding a theory difference.
+
+    The SACC adapter over :func:`concealing_factor`: it reads the rows the
+    factor must span, applies the factor to ``sacc_data.mean``, and writes the
+    blinded file. The blinding arithmetic itself lives in that function, which
+    knows nothing about SACC.
 
     Both theory vectors (fiducial and hidden) come from a single ``theory_fn``:
     the shipped default CCL backend when none is supplied, else the caller's.
@@ -122,12 +218,16 @@ class ConcealDataVector():
         else:
             self.theory_fn = theory_fn
 
-        # draw the hidden shift and overlay it on the fiducial point
+        # the hidden point, recomputed here only so debug can report it and
+        # theory_vec_conceal can be exposed; the factor itself is drawn again,
+        # identically, inside concealing_factor.
         self.__shifts = draw_param_shifts(self.shifts_dict, seed,
                                           shift_distr=shift_distr)
-        self.__concealed_params = self._overlay_shifts(self.__shifts)
+        self.__concealed_params = _overlay_shifts(self.fiducial_params,
+                                                  self.__shifts)
 
         # shape guard: theory vector must align to the SACC rows
+        self._theory_cache = {}
         self.theory_vec_fid = self._checked_theory_vec(self.fiducial_params)
 
         if self._debug:
@@ -135,7 +235,22 @@ class ConcealDataVector():
             print(f"[DEBUG] Concealed params: {self.__concealed_params}")
 
     def _checked_theory_vec(self, params):
-        """Evaluate theory_fn and enforce a 1-D vector aligned to sacc_data.mean."""
+        """Evaluate theory_fn and enforce a 1-D vector aligned to sacc_data.mean.
+
+        This is the alignment guard the SACC coupling buys, so it wraps every
+        theory evaluation the class makes --- including the two inside
+        :func:`concealing_factor`. Memoized on the parameter point, so the
+        fiducial and hidden vectors are each computed exactly once however many
+        times they are asked for.
+        """
+        key = tuple(sorted(params.items()))
+        try:
+            hit = self._theory_cache.get(key)
+        except TypeError:  # unhashable parameter value: skip the memo
+            key, hit = None, None
+        if hit is not None:
+            return hit
+
         vec = np.asarray(self.theory_fn(params))
         if vec.shape != np.shape(self.sacc_data.mean):
             raise ValueError(
@@ -143,18 +258,16 @@ class ConcealDataVector():
                 f"shape {np.shape(self.sacc_data.mean)}; theory_fn must return "
                 f"a 1-D vector aligned to the SACC rows."
             )
+        if key is not None:
+            self._theory_cache[key] = vec
         return vec
-
-    def _overlay_shifts(self, shifts):
-        """Overlay drawn deltas on the fiducial point: fiducial[k] + shift[k]."""
-        concealed = deepcopy(self.fiducial_params)
-        for k, delta in shifts.items():
-            concealed[k] = self.fiducial_params[k] + delta
-        return concealed
 
     def calculate_concealing_factor(self, factor_type="add"):
         r"""
         Calculate the concealing (blinding) factor, per Muir et al. 2019.
+
+        Delegates to :func:`concealing_factor`, evaluating the theory through
+        the class's alignment guard.
 
         Parameters
         ----------
@@ -175,17 +288,14 @@ class ConcealDataVector():
             .. math:: f^{\rm mult} = t(\theta_{\rm hidden}) / t(\theta_{\rm fid})
         """
         self.factor_type = factor_type
-
-        # fiducial vector computed once in __init__ (shape guard); recompute
-        # nothing there --- reuse it and evaluate only the hidden point here.
+        self.__concealing_factor = concealing_factor(
+            self.fiducial_params, self.shifts_dict,
+            seed=self.seed, theory_fn=self._checked_theory_vec,
+            shift_distr=self.shift_distr, factor_type=factor_type,
+        )
+        # both theory points are memoized by now, so this costs no extra call
         self.theory_vec_conceal = self._checked_theory_vec(self.__concealed_params)
 
-        if factor_type == "add":
-            self.__concealing_factor = self.theory_vec_conceal - self.theory_vec_fid
-        elif factor_type == "mult":
-            self.__concealing_factor = self.theory_vec_conceal / self.theory_vec_fid
-        else:
-            raise NotImplementedError('Only "add" and "mult" concealing factor is implemented')
         if self._debug:
             return self.__concealing_factor
 

@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import sacc
 
-from smokescreen.datavector import ConcealDataVector
+from smokescreen.datavector import ConcealDataVector, concealing_factor
 from smokescreen.param_shifts import draw_param_shifts
 
 
@@ -45,6 +45,75 @@ def sacc_data():
 @pytest.fixture
 def theory_fn():
     return _synthetic_theory_fn(5)
+
+
+# --- pure vector core -------------------------------------------------------
+
+def test_concealing_factor_is_theory_difference(theory_fn):
+    factor = concealing_factor(FIDUCIAL, SHIFTS, seed=SEED, theory_fn=theory_fn)
+
+    deltas = draw_param_shifts(SHIFTS, SEED, shift_distr="flat")
+    concealed = {k: FIDUCIAL[k] + deltas.get(k, 0.0) for k in FIDUCIAL}
+    expected = theory_fn(concealed) - theory_fn(FIDUCIAL)
+    np.testing.assert_array_equal(factor, expected)
+
+
+def test_concealing_factor_mult_is_theory_ratio(theory_fn):
+    factor = concealing_factor(FIDUCIAL, SHIFTS, seed=SEED, theory_fn=theory_fn,
+                               factor_type="mult")
+
+    deltas = draw_param_shifts(SHIFTS, SEED, shift_distr="flat")
+    concealed = {k: FIDUCIAL[k] + deltas.get(k, 0.0) for k in FIDUCIAL}
+    expected = theory_fn(concealed) / theory_fn(FIDUCIAL)
+    np.testing.assert_array_equal(factor, expected)
+
+
+def test_concealing_factor_needs_no_sacc_and_no_backend(theory_fn):
+    # the core takes a theory_fn explicitly and never reaches for a default
+    # backend, so it stays free of pyccl and of any data container
+    factor = concealing_factor(FIDUCIAL, SHIFTS, seed=SEED, theory_fn=theory_fn)
+    assert factor.shape == (5,)
+    with pytest.raises(TypeError):
+        concealing_factor(FIDUCIAL, SHIFTS, seed=SEED)
+
+
+def test_concealing_factor_rejects_unknown_shift_key(theory_fn):
+    with pytest.raises(ValueError, match="omega_c"):
+        concealing_factor(FIDUCIAL, {"omega_c": 0.05}, seed=SEED,
+                          theory_fn=theory_fn)
+
+
+def test_concealing_factor_rejects_unknown_factor_type(theory_fn):
+    with pytest.raises(NotImplementedError):
+        concealing_factor(FIDUCIAL, SHIFTS, seed=SEED, theory_fn=theory_fn,
+                          factor_type="subtract")
+
+
+def test_class_factor_matches_pure_core(sacc_data, theory_fn):
+    # the class is an adapter: same seed, same shifts, same factor
+    cdv = ConcealDataVector(FIDUCIAL, SHIFTS, sacc_data, seed=SEED,
+                            theory_fn=theory_fn, debug=True)
+    np.testing.assert_array_equal(
+        cdv.calculate_concealing_factor(factor_type="add"),
+        concealing_factor(FIDUCIAL, SHIFTS, seed=SEED, theory_fn=theory_fn),
+    )
+
+
+def test_class_evaluates_each_theory_point_once(sacc_data):
+    calls = []
+    base = np.arange(1, 6, dtype=float)
+
+    def counting_theory_fn(p):
+        calls.append(dict(p))
+        return base * p["sigma8"] + p["Omega_c"]
+
+    cdv = ConcealDataVector(FIDUCIAL, SHIFTS, sacc_data, seed=SEED,
+                            theory_fn=counting_theory_fn)
+    cdv.calculate_concealing_factor(factor_type="add")
+    cdv.calculate_concealing_factor(factor_type="mult")
+    # fiducial and hidden, once each — delegating the factor must not make the
+    # adapter pay for repeated theory evaluations
+    assert len(calls) == 2
 
 
 # --- construction & length guard --------------------------------------------
