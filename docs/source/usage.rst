@@ -64,7 +64,8 @@ construction raises ``ValueError`` if one is not.
 Draws are **per-key independent**: the delta for a key depends only on
 ``(key, seed, shift_distr)``, never on the other keys present or on the
 iteration order of the mapping. These semantics are versioned by
-:data:`smokescreen.DRAW_SCHEME`, which is stamped into every blinded file.
+:data:`smokescreen.param_shifts.DRAW_SCHEME`, which is stamped into every
+blinded file.
 
 From a notebook or your code
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -105,9 +106,9 @@ The concealing factor alone
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The blinding arithmetic is a pure vector operation, and
-:func:`~smokescreen.concealing_factor` is the whole of it. It never touches a
-SACC file. Reach for it when you hold your own data container --- for example a
-pipeline that blinds selected rows of a larger file:
+:func:`~smokescreen.datavector.concealing_factor` is the whole of it. It never
+touches a SACC file. Reach for it when you hold your own data container --- for
+example a pipeline that blinds selected rows of a larger file:
 
 .. code-block:: python
 
@@ -124,10 +125,10 @@ default backend, so nothing in this call path imports ``pyccl``.
 The default CCL backend and its SACC contract
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-When ``theory_fn`` is ``None``, :class:`~smokescreen.ConcealDataVector` builds
-the default backend with
-:func:`smokescreen.backends.ccl.build_ccl_theory_fn`. That backend imposes a
-contract on the SACC file:
+When ``theory_fn`` is ``None``,
+:class:`~smokescreen.datavector.ConcealDataVector` builds the default backend
+with :func:`smokescreen.backends.ccl.build_ccl_theory_fn`. That backend imposes
+a contract on the SACC file:
 
 * It models **cosmic shear only** --- data types ``galaxy_shear_cl_ee``,
   ``galaxy_shear_xi_plus`` and ``galaxy_shear_xi_minus``. Any other data type
@@ -204,7 +205,7 @@ The following metadata is stamped:
      - sha256 hex digest of ``str(seed)`` --- a commitment to the seed, **not**
        the seed
    * - ``draw_scheme``
-     - The :data:`~smokescreen.DRAW_SCHEME` the shifts were drawn under
+     - The :data:`~smokescreen.param_shifts.DRAW_SCHEME` the shifts were drawn under
 
 .. warning::
    The raw seed is **not** written by default. The commitment ties the blinded
