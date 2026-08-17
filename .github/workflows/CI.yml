@@ -51,8 +51,13 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install '.[test]'
 
+      # The row-alignment test importorskips pyccl, so a broken pyccl would
+      # silently drop the fork's core guarantee and leave this job green.
+      - name: Assert pyccl imports
+        run: python -c "import pyccl"
+
       - name: Test with pytest
-        run: pytest --cov=smokescreen --cov-report=xml ./tests
+        run: pytest --cov=smokescreen ./tests
 
   # Lint runs independently of the test suite so a red pytest never hides
   # a lint failure (and vice versa).
