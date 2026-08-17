@@ -5,6 +5,7 @@ from smokescreen.param_shifts import (
     DRAW_SCHEME,
     draw_param_shifts,
     draw_flat_param_shifts,
+    seed_commitment,
     _normalize_seed,
 )
 
@@ -56,6 +57,23 @@ def test_golden_values():
     assert draw_param_shifts({"Omega_c": 0.05}, 2112, shift_distr="gaussian") == {
         "Omega_c": pytest.approx(0.008622042117174187, abs=0, rel=1e-15)
     }
+
+
+def test_seed_commitment_golden_values():
+    # Downstream custody schemes compute the same digest independently and
+    # compare, so the encoding (sha256 of str(seed) as UTF-8) is a contract,
+    # not an implementation detail.
+    assert seed_commitment("my_secret_seed") == (
+        "33d45fe532cca83c416260f8095511c1fe0c731293703501f99ec5775d1082cc"
+    )
+    assert seed_commitment(2112) == (
+        "44c59909f17c296d6f2ec4a53efac3a951add75aa67616d9c5d9d2f5fbb44f04"
+    )
+    assert seed_commitment(2112) == seed_commitment("2112")
+
+
+def test_seed_commitment_is_seed_specific():
+    assert seed_commitment("seed_a") != seed_commitment("seed_b")
 
 
 def test_draw_does_not_perturb_global_np_random():

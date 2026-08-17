@@ -9,7 +9,7 @@ import pytest
 import sacc
 
 from smokescreen.datavector import ConcealDataVector, concealing_factor
-from smokescreen.param_shifts import draw_param_shifts
+from smokescreen.param_shifts import DRAW_SCHEME, draw_param_shifts, seed_commitment
 
 
 FIDUCIAL = {"sigma8": 0.8, "Omega_c": 0.25}
@@ -224,9 +224,30 @@ def test_save_fits_and_cov_unchanged(tmp_path, sacc_data, theory_fn, monkeypatch
     assert md["concealed"] is True
     assert md["creator"] == "test_user"
     assert "info" in md
-    assert md["seed_smokescreen"] == SEED
 
     assert (tmp_path / "root_concealed_data_vector.fits").exists()
+
+
+def test_save_commits_to_seed_without_revealing_it(tmp_path, sacc_data, theory_fn):
+    # the concealed file is what circulates while the analysis is blind; the
+    # seed plus the (public) config would unblind it, so only a commitment goes in
+    cdv = _blinded_cdv(sacc_data, theory_fn)
+    md = cdv.save_concealed_datavector(str(tmp_path), "root",
+                                       return_sacc=True).metadata
+
+    assert "seed_smokescreen" not in md
+    assert md["seed_commitment"] == seed_commitment(SEED)
+    assert str(SEED) not in md["seed_commitment"]
+    assert md["draw_scheme"] == DRAW_SCHEME
+
+
+def test_save_stamp_seed_opt_in(tmp_path, sacc_data, theory_fn):
+    # upstream's behaviour remains reachable, deliberately
+    cdv = _blinded_cdv(sacc_data, theory_fn)
+    md = cdv.save_concealed_datavector(str(tmp_path), "root", return_sacc=True,
+                                       stamp_seed=True).metadata
+    assert md["seed_smokescreen"] == SEED
+    assert md["seed_commitment"] == seed_commitment(SEED)
 
 
 def test_save_return_sacc_false(tmp_path, sacc_data, theory_fn, monkeypatch):

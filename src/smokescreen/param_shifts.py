@@ -11,6 +11,9 @@ shifts that drive blinding. The shift for a given parameter is a *delta*
 to be added to the fiducial value, drawn from a local, seeded RNG in a
 way that does not depend on the iteration order of the shifts mapping.
 
+It also holds :func:`seed_commitment`, the publishable stand-in for the secret
+seed itself.
+
 
 Parameter Shifts
 -----------------
@@ -18,6 +21,8 @@ Parameter Shifts
 .. autodata:: DRAW_SCHEME
 
 .. autofunction:: draw_param_shifts
+
+.. autofunction:: seed_commitment
 '''
 import hashlib
 from collections.abc import Mapping
@@ -72,6 +77,33 @@ def _normalize_seed(seed):
     if isinstance(seed, (int, np.integer)):
         return int(seed)
     raise TypeError(f"seed must be int or str, got {type(seed).__name__}")
+
+
+def seed_commitment(seed):
+    """
+    Public commitment to a seed: the sha256 hex digest of its string form.
+
+    Safe to publish alongside a blinded product. It ties the product to the
+    blind that produced it --- a later-revealed seed either matches the
+    commitment or it does not --- without revealing the seed while the analysis
+    is still blind.
+
+    An ``int`` seed is committed as ``str(seed)``, so ``2112`` and ``"2112"``
+    commit identically. The commitment conceals the seed only to the extent
+    that the seed is unguessable: a small integer is trivially brute-forced
+    from its digest, so choose a high-entropy seed.
+
+    Parameters
+    ----------
+    seed : int or str
+        Seed value.
+
+    Returns
+    -------
+    str
+        Lowercase sha256 hex digest of ``str(seed)`` encoded as UTF-8.
+    """
+    return hashlib.sha256(str(seed).encode("utf-8")).hexdigest()
 
 
 def draw_param_shifts(shifts_dict, seed, shift_distr="flat"):
