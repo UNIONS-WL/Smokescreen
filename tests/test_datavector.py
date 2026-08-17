@@ -8,7 +8,11 @@ import numpy as np
 import pytest
 import sacc
 
-from smokescreen.datavector import ConcealDataVector, concealing_factor
+from smokescreen.datavector import (
+    ConcealDataVector,
+    concealing_factor,
+    factor_from_params,
+)
 from smokescreen.param_shifts import DRAW_SCHEME, draw_param_shifts, seed_commitment
 
 
@@ -89,6 +93,23 @@ def test_concealing_factor_rejects_unknown_factor_type(theory_fn):
                           factor_type="subtract")
 
 
+def test_factor_from_params_is_the_undrawn_half(theory_fn):
+    # concealing_factor == draw + factor_from_params, so a caller holding its
+    # own hidden point reaches the same factor without drawing again.
+    shifts = draw_param_shifts(SHIFTS, SEED)
+    concealed = {k: FIDUCIAL[k] + shifts.get(k, 0.0) for k in FIDUCIAL}
+    np.testing.assert_array_equal(
+        factor_from_params(FIDUCIAL, concealed, theory_fn=theory_fn),
+        concealing_factor(FIDUCIAL, SHIFTS, seed=SEED, theory_fn=theory_fn),
+    )
+
+
+def test_factor_from_params_rejects_unknown_factor_type(theory_fn):
+    with pytest.raises(NotImplementedError):
+        factor_from_params(FIDUCIAL, FIDUCIAL, theory_fn=theory_fn,
+                           factor_type="subtract")
+
+
 def test_class_factor_matches_pure_core(sacc_data, theory_fn):
     # the class is an adapter: same seed, same shifts, same factor
     cdv = ConcealDataVector(FIDUCIAL, SHIFTS, sacc_data, seed=SEED,
@@ -114,6 +135,39 @@ def test_class_evaluates_each_theory_point_once(sacc_data):
     # fiducial and hidden, once each — delegating the factor must not make the
     # adapter pay for repeated theory evaluations
     assert len(calls) == 2
+
+
+def test_class_draws_the_hidden_point_once(sacc_data, theory_fn):
+    # The class owns its draw: mutating the caller's shifts_dict afterwards
+    # must not move the factor, or theory_vec_conceal and the factor would
+    # silently describe different hidden points.
+    mutable = dict(SHIFTS)
+    cdv = ConcealDataVector(FIDUCIAL, mutable, sacc_data, seed=SEED,
+                            theory_fn=theory_fn, debug=True)
+    mutable["sigma8"] = 10.0
+    mutable["Omega_c"] = 10.0
+
+    factor = cdv.calculate_concealing_factor(factor_type="add")
+    np.testing.assert_array_equal(
+        factor,
+        concealing_factor(FIDUCIAL, SHIFTS, seed=SEED, theory_fn=theory_fn),
+    )
+    # and the exposed hidden-point theory is the one the factor was built from
+    np.testing.assert_array_equal(factor,
+                                  cdv.theory_vec_conceal - cdv.theory_vec_fid)
+
+
+def test_rejected_factor_type_leaves_the_object_untouched(sacc_data, theory_fn):
+    cdv = ConcealDataVector(FIDUCIAL, SHIFTS, sacc_data, seed=SEED,
+                            theory_fn=theory_fn, debug=True)
+    good = cdv.calculate_concealing_factor(factor_type="add")
+
+    with pytest.raises(NotImplementedError):
+        cdv.calculate_concealing_factor(factor_type="subtract")
+
+    assert cdv.factor_type == "add"
+    np.testing.assert_array_equal(cdv.apply_concealing_to_likelihood_datavec(),
+                                  sacc_data.mean + good)
 
 
 # --- construction & length guard --------------------------------------------
