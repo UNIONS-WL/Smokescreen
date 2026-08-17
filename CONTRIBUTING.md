@@ -28,7 +28,7 @@ Please **open an issue** on GitHub with a clear description of the problem, a mi
    ```bash
    pytest
    ```
-2. Follow the existing code style. We use `flake8` for linting.
+2. Follow the existing code style. We use `flake8` for linting; CI runs it as its own job, with a 120-character line limit.
 3. Update the documentation and changelog where relevant.
 4. **Open an issue related to your PR**
 5. Open a pull request against the `main` branch with a clear description of your changes and the motivation behind them. Link it to the issue you opened.
@@ -39,7 +39,11 @@ Contributors are expected to adhere to a standard of respectful and inclusive co
 
 ## Scope
 
-Smokescreen is designed to be likelihood- and probe-agnostic, delegating theory calculations to [Firecrown](https://github.com/LSSTDESC/firecrown). Contributions that extend blinding support to new Firecrown likelihoods, improve interoperability, or add new blinding schemes are especially welcome.
+Smokescreen is probe- and model-agnostic. It gets its theory from a single callable, `theory_fn(cosmo_params) -> np.ndarray`, which returns a vector aligned to the rows being concealed. Any model can be a backend, so long as it fits that shape. The library ships one built-in backend, the CCL cosmic-shear backend in `src/smokescreen/backends/`, which is the default when no `theory_fn` is given.
+
+That protocol is the extension point. Contributions that add a theory backend, widen the built-in backend's data-type coverage, or add new blinding schemes are especially welcome.
+
+The firecrown integration (`src/smokescreen/firecrown_datavector.py`) is inherited from upstream [LSSTDESC/Smokescreen](https://github.com/LSSTDESC/Smokescreen). This fork retains it but does not support it: firecrown is not a declared dependency, and the module is not covered by the test suite. Build new work on `theory_fn`.
 
 ## Contact
 

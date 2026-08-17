@@ -42,8 +42,8 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/LSSTDESC/Smokescreen"
-Issues = "https://github.com/LSSTDESC/Smokescreen/issues"
+Homepage = "https://github.com/UNIONS-WL/Smokescreen"
+Issues = "https://github.com/UNIONS-WL/Smokescreen/issues"
 
 # [tool.hatch]
 # version.source = "vcs"
