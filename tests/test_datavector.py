@@ -293,26 +293,50 @@ def test_end_to_end_synthetic(tmp_path, sacc_data, theory_fn, monkeypatch):
 
 # --- default CCL backend ----------------------------------------------------
 
+CS_THETAS = np.array([5.0, 20.0, 60.0, 120.0])  # arcmin
+CS_ELLS = np.array([50, 200, 800])
+CS_PAIRS = [("src0", "src0"), ("src0", "src1"), ("src1", "src1")]
+
+
 def _make_cosmic_shear_sacc():
-    """Small cosmic-shear SACC with 2 NZ tracers, xi± and cl_ee rows."""
+    """Small cosmic-shear SACC with 2 NZ tracers, xi± and cl_ee rows.
+
+    Every row carries a distinct value: a constant-valued fixture would let a
+    permuted or mis-scattered theory vector pass unnoticed.
+    """
     s = sacc.Sacc()
     z = np.linspace(0.05, 2.0, 50)
     for name, zmean in [("src0", 0.5), ("src1", 1.0)]:
         nz = np.exp(-0.5 * ((z - zmean) / 0.2) ** 2)
         s.add_tracer("NZ", name, z, nz)
-    thetas = np.array([5.0, 20.0, 60.0, 120.0])  # arcmin
-    ells = [50, 200, 800]
-    pairs = [("src0", "src0"), ("src0", "src1"), ("src1", "src1")]
-    for dt in ("galaxy_shear_xi_plus", "galaxy_shear_xi_minus"):
-        for p in pairs:
-            for th in thetas:
-                s.add_data_point(dt, p, 1e-6, theta=th)
-    for p in pairs:
-        for ell in ells:
-            s.add_data_point("galaxy_shear_cl_ee", p, 1e-9, ell=ell)
+    for k, dt in enumerate(("galaxy_shear_xi_plus", "galaxy_shear_xi_minus")):
+        for j, p in enumerate(CS_PAIRS):
+            for th in CS_THETAS:
+                s.add_data_point(dt, p, 1e-6 * (1 + j + 3 * k) * (5.0 / th),
+                                 theta=th)
+    for j, p in enumerate(CS_PAIRS):
+        for ell in CS_ELLS:
+            s.add_data_point("galaxy_shear_cl_ee", p, 1e-9 * (1 + j) * (50.0 / ell),
+                             ell=ell)
     n = len(s.mean)
     s.add_covariance(np.eye(n) * 1e-12)
     return s
+
+
+def _recompute_xi_plus(s, params, pair):
+    """ξ+ for one tracer pair, computed straight from CCL — no Smokescreen."""
+    import pyccl as ccl
+
+    cosmo = ccl.Cosmology(transfer_function="eisenstein_hu",
+                          matter_power_spectrum="halofit", **params)
+    tracers = [
+        ccl.WeakLensingTracer(cosmo, dndz=(s.tracers[name].z, s.tracers[name].nz))
+        for name in pair
+    ]
+    ell_grid = np.unique(np.geomspace(2, 30000, 512).astype(int))
+    cl = ccl.angular_cl(cosmo, tracers[0], tracers[1], ell_grid)
+    return ccl.correlation(cosmo, ell=ell_grid, C_ell=cl,
+                           theta=CS_THETAS / 60.0, type="GG+")
 
 
 def test_default_ccl_backend(tmp_path, monkeypatch):
@@ -336,3 +360,32 @@ def test_default_ccl_backend(tmp_path, monkeypatch):
 
     out = cdv.save_concealed_datavector(str(tmp_path), "cs", return_sacc=True)
     np.testing.assert_allclose(out.covariance.dense, cov_before)
+
+
+def test_default_ccl_backend_rows_align():
+    """The backend's whole job: theory_vec_fid[i] is the theory for row i.
+
+    A permuted theory vector, a ξ+/ξ− branch swap, or a degrees-for-arcmin
+    reading of the theta tag all still produce a smooth, plausible-looking
+    blind, so this is pinned structurally: one ξ+ block is recomputed straight
+    from CCL and compared row for row.
+    """
+    pytest.importorskip("pyccl")
+    s = _make_cosmic_shear_sacc()
+    fiducial = {"sigma8": 0.81, "Omega_c": 0.26, "Omega_b": 0.045,
+                "h": 0.67, "n_s": 0.96}
+
+    cdv = ConcealDataVector(fiducial, {"sigma8": 0.05}, s, seed=SEED,
+                            theory_fn=None)
+
+    idx = s.indices("galaxy_shear_xi_plus", ("src0", "src0"))
+    np.testing.assert_allclose(cdv.theory_vec_fid[idx],
+                               _recompute_xi_plus(s, fiducial, ("src0", "src0")),
+                               rtol=1e-10)
+
+    # ξ+ falls with θ over 5–120 arcmin: a shuffled block would not
+    xi_plus = cdv.theory_vec_fid[idx]
+    assert np.all(np.diff(xi_plus) < 0)
+    # ξ− is a different transform of the same Cℓ, not a copy of ξ+
+    minus_idx = s.indices("galaxy_shear_xi_minus", ("src0", "src0"))
+    assert np.all(cdv.theory_vec_fid[minus_idx] < xi_plus)
