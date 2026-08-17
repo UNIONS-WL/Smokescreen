@@ -97,7 +97,7 @@ def datavector_main(path_to_sacc: Path_fr,
 
 
 def encrypt_main(path_to_sacc: Path_fr,
-                 path_to_save: Path_fr = None,
+                 path_to_save: Path_drw = None,
                  keep_original: bool = False) -> None:
     """
     [!] WARNING: BY DEFAULT, IT DELETES THE ORIGINAL SACC FILE. [!]
@@ -110,8 +110,9 @@ def encrypt_main(path_to_sacc: Path_fr,
     path_to_sacc : str
         Path to the SACC file to be encrypted.
     path_to_save : str, optional
-        Path to save the key used to encrypt the SACC file, and the encrypted file.
-        by default None [saves in the same directory as the encrypted file].
+        Directory to save the key used to encrypt the SACC file, and the
+        encrypted file. It must exist and be writable.
+        By default None [saves in the same directory as the encrypted file].
     keep_original : bool, optional
         If True, keeps the original file, by default False.
     """

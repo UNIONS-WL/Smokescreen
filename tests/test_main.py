@@ -153,6 +153,25 @@ def test_encrypt_main_remove_original(mock_getuser, mock_encrypt_file, temp_file
     assert "Original file" in captured.out
 
 
+@patch('smokescreen.__main__.encrypt_file')
+def test_encrypt_cli_accepts_an_output_directory(mock_encrypt_file, temp_file, tmp_path):
+    # --path_to_save is an output *directory*. Annotated as a readable file it
+    # was rejected at argument parsing, so the documented invocation could
+    # never run. Drive the real parser to keep the annotation honest.
+    from jsonargparse import CLI
+
+    mock_encrypt_file.return_value = (b'encrypted_sacc', b'key')
+    outdir = tmp_path / "keys"
+    outdir.mkdir()
+
+    CLI({"encrypt": encrypt_main}, as_positional=False,
+        args=["encrypt", "--path_to_sacc", str(temp_file),
+              "--path_to_save", str(outdir), "--keep_original", "true"])
+
+    assert mock_encrypt_file.call_count == 1
+    assert str(mock_encrypt_file.call_args[0][1]) == str(outdir)
+
+
 def test_encrypt_main_file_not_found():
     # Test encrypting a nonexistent file
     with pytest.raises(AssertionError):
