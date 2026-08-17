@@ -22,6 +22,8 @@ Parameter Shifts
 
 .. autofunction:: draw_param_shifts
 
+.. autodata:: COMMITMENT_DOMAIN
+
 .. autofunction:: seed_commitment
 '''
 import hashlib
@@ -79,9 +81,19 @@ def _normalize_seed(seed):
     raise TypeError(f"seed must be int or str, got {type(seed).__name__}")
 
 
+COMMITMENT_DOMAIN = b"smokescreen-seed-commitment-v1|"
+"""Domain-separation prefix hashed ahead of the seed by :func:`seed_commitment`.
+
+It keeps the commitment digest in a different hash domain from
+``_normalize_seed``, which derives the RNG base seed from the *undomained*
+sha256 of the same string. Without the prefix the two digests coincide and the
+first 16 hex characters of the commitment are the base seed itself.
+"""
+
+
 def seed_commitment(seed):
     """
-    Public commitment to a seed: the sha256 hex digest of its string form.
+    Public commitment to a seed: a domain-separated sha256 digest of it.
 
     Safe to publish alongside a blinded product. It ties the product to the
     blind that produced it --- a later-revealed seed either matches the
@@ -89,9 +101,20 @@ def seed_commitment(seed):
     is still blind.
 
     An ``int`` seed is committed as ``str(seed)``, so ``2112`` and ``"2112"``
-    commit identically. The commitment conceals the seed only to the extent
-    that the seed is unguessable: a small integer is trivially brute-forced
-    from its digest, so choose a high-entropy seed.
+    commit identically.
+
+    The commitment is safe to publish under two conditions, both load-bearing:
+
+    - **Domain separation.** The digest is taken over
+      :data:`COMMITMENT_DOMAIN` followed by the seed, *not* over the bare seed.
+      ``_normalize_seed`` derives the RNG base seed from the bare sha256 of
+      the same string, so an undomained commitment would carry that base seed
+      verbatim in its first 16 hex characters and the blind would be
+      recoverable from the artifact meant to protect it.
+    - **An unguessable seed.** The digest conceals the seed only to the extent
+      that the seed has entropy: a small integer is trivially brute-forced from
+      its digest, so choose a high-entropy seed (e.g.
+      ``secrets.token_hex(16)``).
 
     Parameters
     ----------
@@ -101,9 +124,10 @@ def seed_commitment(seed):
     Returns
     -------
     str
-        Lowercase sha256 hex digest of ``str(seed)`` encoded as UTF-8.
+        Lowercase sha256 hex digest of ``COMMITMENT_DOMAIN + str(seed)``
+        encoded as UTF-8.
     """
-    return hashlib.sha256(str(seed).encode("utf-8")).hexdigest()
+    return hashlib.sha256(COMMITMENT_DOMAIN + str(seed).encode("utf-8")).hexdigest()
 
 
 def draw_param_shifts(shifts_dict, seed, shift_distr="flat"):
@@ -129,7 +153,7 @@ def draw_param_shifts(shifts_dict, seed, shift_distr="flat"):
         (typically straddling zero).
     seed : int or str
         Seed for the random number generator. A ``str`` is normalized to an
-        ``int`` (see :func:`_normalize_seed`).
+        ``int`` (see ``_normalize_seed``).
     shift_distr : str
         ``"flat"`` draws uniformly over the delta envelope. ``"gaussian"``
         draws from a zero-mean Gaussian with ``sigma`` equal to the ``float``

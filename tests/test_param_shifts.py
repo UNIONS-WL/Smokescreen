@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from smokescreen.param_shifts import (
+    COMMITMENT_DOMAIN,
     DRAW_SCHEME,
     draw_param_shifts,
     draw_flat_param_shifts,
@@ -61,19 +62,31 @@ def test_golden_values():
 
 def test_seed_commitment_golden_values():
     # Downstream custody schemes compute the same digest independently and
-    # compare, so the encoding (sha256 of str(seed) as UTF-8) is a contract,
-    # not an implementation detail.
+    # compare, so the encoding (sha256 of COMMITMENT_DOMAIN + str(seed) as
+    # UTF-8) is a cross-repo contract, not an implementation detail.
+    assert COMMITMENT_DOMAIN == b"smokescreen-seed-commitment-v1|"
     assert seed_commitment("my_secret_seed") == (
-        "33d45fe532cca83c416260f8095511c1fe0c731293703501f99ec5775d1082cc"
+        "c29683341f7a04777509cb233188d076e89a4c40b58904d00765e4bd6a387fb1"
     )
     assert seed_commitment(2112) == (
-        "44c59909f17c296d6f2ec4a53efac3a951add75aa67616d9c5d9d2f5fbb44f04"
+        "3c1b96a27d88a24ab1b86b78d467f2f16ea4f8f37309424ce95992e8e4360262"
     )
     assert seed_commitment(2112) == seed_commitment("2112")
 
 
 def test_seed_commitment_is_seed_specific():
     assert seed_commitment("seed_a") != seed_commitment("seed_b")
+
+
+def test_seed_commitment_does_not_embed_the_rng_seed():
+    # The commitment must live in a different hash domain from the RNG seed
+    # derivation. Undomained, seed_commitment(s) and _normalize_seed(s) are the
+    # same digest, and commitment[:16] IS the base seed the shifts are drawn
+    # from — publishing the commitment would publish the blind.
+    for seed in ("my_secret_seed", "0f9a1c", "a" * 32):
+        commitment = seed_commitment(seed)
+        assert commitment[:16] != format(_normalize_seed(seed), "016x")
+        assert format(_normalize_seed(seed), "016x") not in commitment
 
 
 def test_draw_does_not_perturb_global_np_random():
