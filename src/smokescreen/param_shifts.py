@@ -15,12 +15,36 @@ way that does not depend on the iteration order of the shifts mapping.
 Parameter Shifts
 -----------------
 
+.. autodata:: DRAW_SCHEME
+
 .. autofunction:: draw_param_shifts
 '''
 import hashlib
 from collections.abc import Mapping
 
 import numpy as np
+
+
+DRAW_SCHEME = 2
+"""Version of the shift-draw semantics implemented by :func:`draw_param_shifts`.
+
+Two installs that agree on ``(seed, shifts_dict, shift_distr)`` produce the same
+deltas only if they also agree on ``DRAW_SCHEME``. Downstream custody schemes
+bind this number into their blind commitment, so an install with different draw
+semantics fails loudly at unblind instead of silently subtracting the wrong
+shift.
+
+Schemes:
+
+1. One global ``numpy.random.default_rng(seed)`` stream consumed sequentially
+   over the sorted keys (upstream DESC Smokescreen). A key's delta depends on
+   how many sorted-earlier keys are present.
+2. A per-key RNG, ``numpy.random.default_rng([seed, hash(key)])`` (this fork).
+   A key's delta depends only on ``(seed, key, shift_distr)``.
+
+Bump this whenever the drawn deltas for a fixed ``(seed, shifts_dict,
+shift_distr)`` change for any reason.
+"""
 
 
 def _normalize_seed(seed):
@@ -60,7 +84,8 @@ def draw_param_shifts(shifts_dict, seed, shift_distr="flat"):
     iteration order of ``shifts_dict``, and not on which *other* keys are
     present. Each key gets its own RNG derived from ``(seed, key)``, so adding
     or removing a parameter from the shifts envelope never changes any other
-    parameter's drawn delta.
+    parameter's drawn delta. These semantics are versioned by
+    :data:`DRAW_SCHEME`.
 
     Parameters
     ----------

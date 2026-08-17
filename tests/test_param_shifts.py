@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from smokescreen.param_shifts import (
+    DRAW_SCHEME,
     draw_param_shifts,
     draw_flat_param_shifts,
     _normalize_seed,
@@ -32,6 +33,16 @@ def test_key_subset_independence():
     full = draw_param_shifts({"sigma8": 0.05, "Omega_c": 0.03, "h": 0.01}, 42)
     alone = draw_param_shifts({"sigma8": 0.05}, 42)
     assert full["sigma8"] == alone["sigma8"]
+
+
+def test_draw_scheme_is_pinned_and_exported():
+    # DRAW_SCHEME travels into downstream blind commitments, so it must move
+    # in lockstep with the golden values below — never on its own, and never
+    # while the draw semantics change silently underneath it.
+    import smokescreen
+
+    assert DRAW_SCHEME == 2
+    assert smokescreen.DRAW_SCHEME is DRAW_SCHEME
 
 
 def test_golden_values():
