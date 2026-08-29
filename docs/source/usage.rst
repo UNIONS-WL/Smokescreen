@@ -33,10 +33,9 @@ To conceal a data vector you need four things:
 * **A seed** --- an ``int`` or ``str``. It is keyword-only and has no default:
   blinding custody depends on the seed being a deliberate, secret choice.
 
-The theory itself comes from a single callable,
-``theory_fn(cosmo_params) -> np.ndarray``. When you do not supply one, the
-built-in CCL cosmic-shear backend is built from your SACC file. There is no
-likelihood object and no systematics dictionary on this path.
+Theory comes from a single callable, ``theory_fn(cosmo_params) -> np.ndarray``.
+When you do not supply one, the built-in CCL cosmic-shear backend is built from
+your SACC file.
 
 Shift envelopes
 ~~~~~~~~~~~~~~~~
@@ -90,25 +89,20 @@ From a notebook or your code
 
    smoke.save_concealed_datavector("./output", "cosmicshear_sacc")
 
-The full signature is keyword-only after ``sacc_data``::
-
-   ConcealDataVector(fiducial_params, shifts_dict, sacc_data, *,
-                     seed, theory_fn=None, shift_distr="flat",
-                     debug=False, input_format=None)
-
-``shift_distr`` is ``"flat"`` (default) or ``"gaussian"``.
-``calculate_concealing_factor(factor_type="add")`` also accepts ``"mult"``,
-which divides rather than subtracts and is applied multiplicatively.
-With ``debug=True`` the drawn shifts are printed and
-``calculate_concealing_factor`` returns the factor.
+Everything after ``sacc_data`` is keyword-only; see
+:class:`~smokescreen.datavector.ConcealDataVector` in the API reference for the
+full signature. ``shift_distr`` is ``"flat"`` (default) or ``"gaussian"``, and
+``calculate_concealing_factor`` takes ``factor_type="add"`` (default) or
+``"mult"``, which divides rather than subtracts. With ``debug=True`` the drawn
+shifts are printed and ``calculate_concealing_factor`` returns the factor.
 
 The concealing factor alone
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The blinding arithmetic is a pure vector operation, and
-:func:`~smokescreen.datavector.concealing_factor` is the whole of it. It never
-touches a SACC file. Reach for it when you hold your own data container --- for
-example a pipeline that blinds selected rows of a larger file:
+:func:`~smokescreen.datavector.concealing_factor` returns the concealing factor
+alone and never touches a SACC file. Reach for it when you hold your own data
+container --- for example a pipeline that blinds selected rows of a larger
+file:
 
 .. code-block:: python
 
@@ -119,14 +113,12 @@ example a pipeline that blinds selected rows of a larger file:
                               theory_fn=my_theory_fn)
    blinded = my_data_vector + factor
 
-Here ``theory_fn`` is required and keyword-only: at this level there is no
-default backend, so nothing in this call path imports ``pyccl``.
+Here ``theory_fn`` is required and keyword-only; this call path does not import
+``pyccl``.
 
 If you have already drawn the hidden point yourself, use
-:func:`~smokescreen.datavector.factor_from_params` instead. It is the lower
-half of the same operation --- no seed, no draw, just the two theory
-evaluations and their combination --- so the hidden point is drawn exactly
-once and the factor cannot drift from the parameters you believe produced it:
+:func:`~smokescreen.datavector.factor_from_params` instead: no seed and no
+draw, just the two theory evaluations and their combination.
 
 .. code-block:: python
 
@@ -176,10 +168,9 @@ Two conventions the backend assumes and does not verify:
 Supplying your own theory backend
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Any callable that takes a parameter mapping and returns a vector aligned to the
-rows being concealed is a valid backend. Systematics, tracer choices and
-nuisance parameters are closed over inside it --- they never transit
-Smokescreen:
+Any callable that takes a parameter mapping and returns a 1-D vector aligned to
+``sacc_data.mean`` is a valid backend. Systematics, tracer choices and nuisance
+parameters are closed over inside it:
 
 .. code-block:: python
 
@@ -190,23 +181,17 @@ Smokescreen:
    smoke = ConcealDataVector(fiducial_params, shifts_dict, sacc_data,
                              seed=2112, theory_fn=my_theory_fn)
 
-.. note::
-   The firecrown integration path is inherited from upstream
-   `LSSTDESC/Smokescreen <https://github.com/LSSTDESC/Smokescreen>`_ and is
-   unsupported in this fork: not installed, not tested, not maintained. The
-   default and supported theory path is the built-in CCL backend, or a
-   ``theory_fn`` of your own.
+The firecrown path is not supported; see :doc:`installation`.
 
 What is written to the blinded file
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``save_concealed_datavector(path_to_save, file_root, return_sacc=False,
-output_format=None, suffix=None, stamp_seed=False)`` writes a deep copy of the
-input SACC with the blinded mean. The covariance is carried over untouched ---
-blinding shifts the mean and never the covariance. The output format defaults
-to the detected input format, and the file name is
-``{file_root}_{suffix}{ext}`` with ``suffix`` defaulting to
-``concealed_data_vector``.
+:meth:`~smokescreen.datavector.ConcealDataVector.save_concealed_datavector`
+writes a deep copy of the input SACC with the blinded mean; the covariance is
+carried over untouched. The output format defaults to the detected input
+format, and the file name is ``{file_root}_{suffix}{ext}`` with ``suffix``
+defaulting to ``concealed_data_vector``. See the API reference for the full
+signature.
 
 The following metadata is stamped:
 
@@ -220,24 +205,18 @@ The following metadata is stamped:
    * - ``creator``, ``creation``, ``info``
      - Who blinded the file, when, and with what
    * - ``seed_commitment``
-     - sha256 hex digest of
-       :data:`~smokescreen.param_shifts.COMMITMENT_DOMAIN` followed by
-       ``str(seed)`` --- a commitment to the seed, **not** the seed
+     - sha256 commitment to the seed, **not** the seed
    * - ``draw_scheme``
      - The :data:`~smokescreen.param_shifts.DRAW_SCHEME` the shifts were drawn under
 
 .. warning::
-   The raw seed is **not** written by default. The commitment ties the blinded
-   product to the blind that produced it: a later-revealed seed either matches
-   the digest or it does not. The digest is domain-separated, so it does not
-   share a hash domain with the RNG seed derivation and cannot carry the seed
-   itself. It still conceals the seed only to the extent that the seed is
+   The commitment conceals the seed only to the extent that the seed is
    unguessable --- a small integer is trivially brute-forced from its digest,
-   so choose a high-entropy seed. Pass ``stamp_seed=True`` to write the
-   raw seed as ``seed_smokescreen``, as upstream Smokescreen does.
+   so choose a high-entropy seed. Pass ``stamp_seed=True`` to write the raw
+   seed as ``seed_smokescreen``.
 
-``draw_scheme`` lets an unblind attempt made with an install whose draw
-semantics differ fail loudly, rather than silently subtracting the wrong shift.
+``draw_scheme`` makes an unblind attempt made with an install whose draw
+semantics differ fail loudly rather than subtract the wrong shift.
 
 From the command line
 ~~~~~~~~~~~~~~~~~~~~~~

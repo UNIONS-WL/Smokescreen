@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
@@ -19,18 +19,18 @@ classifiers = [
 dependencies = [
     "astropy>=5.2.0",
     "cryptography",
+    "h5py",
     "jsonargparse[signatures]>=4.0",
     "numpy>=2.2.0",
     "pyccl",
     "sacc>=0.12",
     "scipy>=1.9.0",
 ]
-keywords = ["desc", "python", "blinding", "firecrown", "cosmology"]
+keywords = ["desc", "python", "blinding", "cosmology"]
 dynamic = ["version"]
 
 [project.optional-dependencies]
 test = [
-    "h5py",
     "pytest",
     "pytest-cov",
 ]
@@ -44,9 +44,6 @@ docs = [
 [project.urls]
 Homepage = "https://github.com/UNIONS-WL/Smokescreen"
 Issues = "https://github.com/UNIONS-WL/Smokescreen/issues"
-
-# [tool.hatch]
-# version.source = "vcs"
 
 [tool.hatch.version]
 path = "src/smokescreen/_version.py"

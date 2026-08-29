@@ -21,26 +21,18 @@ This repository (under development) contains the modules for data concealment (b
 - Posterior distribution [not yet developed]
 - (TBC) Catalogues
 
-**This fork's documentation is the Sphinx source in [`docs/source/`](docs/source)** — start with [installation](docs/source/installation.rst) and [usage](docs/source/usage.rst). It is not published to a website; build it locally with `pip install -e ".[docs]"`, then `cd docs && python -m sphinx -b html source build`. Upstream's documentation lives at [lsstdesc.org/Smokescreen](https://lsstdesc.org/Smokescreen/); its install instructions and its firecrown-based API do not apply to this fork.
+Documentation is the Sphinx source in [`docs/source/`](docs/source) — start with
+[installation](docs/source/installation.rst) and [usage](docs/source/usage.rst).
 
 > **Note:** this is the [UNIONS-WL](https://github.com/UNIONS-WL) fork of
-> [LSSTDESC/Smokescreen](https://github.com/LSSTDESC/Smokescreen). It ships a
-> `theory_fn(cosmo_params) -> np.ndarray` theory-backend protocol; the built-in
-> CCL backend is the default and supported theory path. The firecrown
-> integration path is inherited from upstream and unsupported in this fork:
-> not installed, not tested, not maintained.
+> [LSSTDESC/Smokescreen](https://github.com/LSSTDESC/Smokescreen). Theory comes
+> from a `theory_fn(cosmo_params) -> np.ndarray` callable, with a built-in CCL
+> cosmic-shear backend as the default. This fork does not support the inherited
+> firecrown path — see the [installation docs](docs/source/installation.rst).
 
 ## Installation
-The single supported install path is pip, pinned at a release tag:
 ```bash
 pip install git+https://github.com/UNIONS-WL/Smokescreen@<tag>
-```
-
-This resolves the full runtime closure — including `pyccl` for the default CCL
-backend — with no conda environment and no PyPI package. To provision the test
-tooling as well, install the `[test]` extra:
-```bash
-pip install "smokescreen[test] @ git+https://github.com/UNIONS-WL/Smokescreen@<tag>"
 ```
 
 For developer installation and other instructions see [`docs/source/installation.rst`](docs/source/installation.rst).

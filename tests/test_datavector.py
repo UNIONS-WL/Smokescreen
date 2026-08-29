@@ -1,10 +1,11 @@
 """Blinding-mechanics tests for ConcealDataVector.
 
 All mechanics tests inject a SYNTHETIC ``theory_fn`` (a pure, deterministic
-closure over the cosmo params) so they never import pyccl or firecrown. The one
-default-CCL-backend test imports pyccl locally.
+closure over the cosmo params); the default-CCL-backend tests exercise the
+built-in backend against pyccl.
 """
 import numpy as np
+import pyccl as ccl
 import pytest
 import sacc
 
@@ -321,7 +322,6 @@ def test_save_custom_suffix(tmp_path, sacc_data, theory_fn, monkeypatch):
 
 
 def test_save_hdf5_format(tmp_path, sacc_data, theory_fn, monkeypatch):
-    pytest.importorskip("h5py")  # sacc.save_hdf5 needs h5py
     monkeypatch.setattr("smokescreen.datavector.getpass.getuser",
                         lambda: "test_user")
     cdv = _blinded_cdv(sacc_data, theory_fn)
@@ -379,8 +379,6 @@ def _make_cosmic_shear_sacc():
 
 def _recompute_xi_plus(s, params, pair):
     """ξ+ for one tracer pair, computed straight from CCL — no Smokescreen."""
-    import pyccl as ccl
-
     cosmo = ccl.Cosmology(transfer_function="eisenstein_hu",
                           matter_power_spectrum="halofit", **params)
     tracers = [
@@ -394,7 +392,6 @@ def _recompute_xi_plus(s, params, pair):
 
 
 def test_default_ccl_backend(tmp_path, monkeypatch):
-    pytest.importorskip("pyccl")
     monkeypatch.setattr("smokescreen.datavector.getpass.getuser",
                         lambda: "test_user")
     s = _make_cosmic_shear_sacc()
@@ -424,7 +421,6 @@ def test_default_ccl_backend_rows_align():
     blind, so this is pinned structurally: one ξ+ block is recomputed straight
     from CCL and compared row for row.
     """
-    pytest.importorskip("pyccl")
     s = _make_cosmic_shear_sacc()
     fiducial = {"sigma8": 0.81, "Omega_c": 0.26, "Omega_b": 0.045,
                 "h": 0.67, "n_s": 0.96}

@@ -28,7 +28,7 @@ Please **open an issue** on GitHub with a clear description of the problem, a mi
    ```bash
    pytest
    ```
-2. Follow the existing code style. We use `flake8` for linting; CI runs it as its own job, with a 120-character line limit.
+2. Follow the existing code style. We use `flake8` for linting, configured in `.flake8`; CI runs it as its own job.
 3. Update the documentation and changelog where relevant.
 4. **Open an issue related to your PR**
 5. Open a pull request against the `main` branch with a clear description of your changes and the motivation behind them. Link it to the issue you opened.
@@ -43,7 +43,7 @@ Smokescreen is probe- and model-agnostic. It gets its theory from a single calla
 
 That protocol is the extension point. Contributions that add a theory backend, widen the built-in backend's data-type coverage, or add new blinding schemes are especially welcome.
 
-The firecrown integration (`src/smokescreen/firecrown_datavector.py`) is inherited from upstream [LSSTDESC/Smokescreen](https://github.com/LSSTDESC/Smokescreen). This fork retains it but does not support it: firecrown is not a declared dependency, and the module is not covered by the test suite. Build new work on `theory_fn`.
+The firecrown path (`src/smokescreen/firecrown_datavector.py`) is not supported — see the [installation docs](docs/source/installation.rst). Build new work on `theory_fn`.
 
 ## Contact
 

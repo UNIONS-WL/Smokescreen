@@ -26,23 +26,6 @@ extensions = [
 templates_path = ['_templates']
 exclude_patterns = []
 
-# The docs build with -n -W: an unresolvable cross-reference to something
-# Smokescreen itself documents is a build failure. What nitpick mode cannot
-# resolve is the *external* half of numpydoc type strings — third-party classes
-# with no intersphinx inventory configured here, and the bare qualifiers
-# napoleon splits out of "str, optional". Ignoring those keeps the -W gate
-# pointed at our own references instead of at other projects' object indices.
-nitpick_ignore = [
-    ('py:class', 'np.ndarray'),
-    ('py:class', 'optional'),
-    ('py:class', 'module'),
-    ('py:class', 'sacc.sacc.Sacc'),
-    ('py:class', 'Cosmology'),
-    ('py:class', 'pyccl.Cosmology'),
-    ('py:class', 'pyccl.WeakLensingTracer'),
-    ('py:func', 'pyccl.correlation'),
-]
-
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
