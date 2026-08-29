@@ -1,1040 +1,445 @@
-import pytest  # noqa: F401
-import types
-import os
-import datetime
-from unittest.mock import patch, MagicMock  # noqa: F401
-from packaging.version import Version
+"""Blinding-mechanics tests for ConcealDataVector.
+
+All mechanics tests inject a SYNTHETIC ``theory_fn`` (a pure, deterministic
+closure over the cosmo params) so they never import pyccl or firecrown. The one
+default-CCL-backend test imports pyccl locally.
+"""
 import numpy as np
+import pytest
 import sacc
-import pyccl as ccl
-import firecrown
-import shutil
 
-# Handle different Firecrown versions
-if Version(firecrown.__version__) >= Version("1.15.0a0"):
-    from firecrown.likelihood import Likelihood
-else:
-    from firecrown.likelihood.likelihood import Likelihood
-
-from firecrown.modeling_tools import ModelingTools
-from smokescreen.datavector import ConcealDataVector
-from smokescreen.utils import load_sacc_file
-
-ccl.gsl_params.LENSING_KERNEL_SPLINE_INTEGRATION = False
-
-COSMO = ccl.CosmologyVanillaLCDM()
+from smokescreen.datavector import (
+    ConcealDataVector,
+    concealing_factor,
+    factor_from_params,
+)
+from smokescreen.param_shifts import DRAW_SCHEME, draw_param_shifts, seed_commitment
 
 
-@pytest.fixture
-def fits_sacc_file(tmp_path):
-    """Create a FITS-format SACC file for testing."""
-    sacc_data = sacc.Sacc()
-    # Add tracers matching cosmic shear example (src0, src1)
-    sacc_data.add_tracer('sp', 'src0')
-    sacc_data.add_tracer('sp', 'src1')
-    # Add data points with realistic values
-    n_ell = 5
-    ell = np.logspace(np.log10(10), np.log10(1000), n_ell)
-    for e in ell:
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('src0', 'src0'), 1e-7, ell=e)
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('src0', 'src1'), 5e-8, ell=e)
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('src1', 'src1'), 2e-7, ell=e)
+FIDUCIAL = {"sigma8": 0.8, "Omega_c": 0.25}
+SHIFTS = {"sigma8": 0.1, "Omega_c": (-0.05, 0.05)}
+SEED = 2112
 
-    # Set mean (3 tracers * 5 ell values = 15 data points)
-    n_data = len(ell) * 3
-    sacc_data.mean = np.ones(n_data) * 1e-7
-    sacc_data.add_covariance(np.eye(n_data) * 1e-14)
 
-    # Save to FITS file
-    fits_file = tmp_path / "test_sacc.fits"
-    sacc_data.save_fits(str(fits_file))
+# --- fixtures ---------------------------------------------------------------
 
-    return str(fits_file), sacc_data
+def _make_sacc(n=5):
+    """A minimal SACC with n cl_ee rows and a dense covariance."""
+    s = sacc.Sacc()
+    s.add_tracer("misc", "src")
+    for i in range(n):
+        s.add_data_point("galaxy_shear_cl_ee", ("src", "src"),
+                         float(i + 1), ell=10 * (i + 1))
+    cov = np.diag(np.arange(1, n + 1, dtype=float)) + 0.01
+    s.add_covariance(cov)
+    return s
+
+
+def _synthetic_theory_fn(n):
+    """Pure length-n theory vector, deterministic in the cosmo params."""
+    base = np.arange(1, n + 1, dtype=float)
+    return lambda p: base * p["sigma8"] + p["Omega_c"]
 
 
 @pytest.fixture
-def hdf5_sacc_file(tmp_path):
-    """Create an HDF5-format SACC file for testing."""
-    sacc_data = sacc.Sacc()
-    # Add tracers matching cosmic shear example (src0, src1)
-    sacc_data.add_tracer('sp', 'src0')
-    sacc_data.add_tracer('sp', 'src1')
-    # Add data points with realistic values
-    n_ell = 5
-    ell = np.logspace(np.log10(10), np.log10(1000), n_ell)
-    for e in ell:
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('src0', 'src0'), 1e-7, ell=e)
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('src0', 'src1'), 5e-8, ell=e)
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('src1', 'src1'), 2e-7, ell=e)
-
-    # Set mean (3 tracers * 5 ell values = 15 data points)
-    n_data = len(ell) * 3
-    sacc_data.mean = np.ones(n_data) * 1e-7
-    sacc_data.add_covariance(np.eye(n_data) * 1e-14)
-
-    # Save to HDF5 file
-    hdf5_file = tmp_path / "test_sacc.hdf5"
-    sacc_data.save_hdf5(str(hdf5_file))
-
-    return str(hdf5_file), sacc_data
+def sacc_data():
+    return _make_sacc(5)
 
 
 @pytest.fixture
-def cosmic_shear_resources(tmp_path):
-    """Copy cosmic shear example files to a temp directory for testing."""
-    # Copy the likelihood file and SACC files
-    source_dir = os.path.join(os.path.dirname(__file__), '..', 'examples', 'cosmic_shear')
+def theory_fn():
+    return _synthetic_theory_fn(5)
 
-    # Copy likelihood file
-    likelihood_src = os.path.join(source_dir, 'cosmicshear_likelihood.py')
-    likelihood_dst = str(tmp_path / 'cosmicshear_likelihood.py')
-    shutil.copy2(likelihood_src, likelihood_dst)
 
-    # Copy FITS SACC file
-    fits_src = os.path.join(source_dir, 'cosmicshear_sacc.fits')
-    fits_dst = str(tmp_path / 'cosmicshear_sacc.fits')
-    shutil.copy2(fits_src, fits_dst)
+# --- pure vector core -------------------------------------------------------
 
-    # Copy HDF5 SACC file
-    hdf5_src = os.path.join(source_dir, 'cosmicshear_sacc.hdf5')
-    hdf5_dst = str(tmp_path / 'cosmicshear_sacc.hdf5')
-    shutil.copy2(hdf5_src, hdf5_dst)
+def test_concealing_factor_is_theory_difference(theory_fn):
+    factor = concealing_factor(FIDUCIAL, SHIFTS, seed=SEED, theory_fn=theory_fn)
 
-    return {
-        'likelihood': likelihood_dst,
-        'fits_sacc': fits_dst,
-        'hdf5_sacc': hdf5_dst
-    }
+    deltas = draw_param_shifts(SHIFTS, SEED, shift_distr="flat")
+    concealed = {k: FIDUCIAL[k] + deltas.get(k, 0.0) for k in FIDUCIAL}
+    expected = theory_fn(concealed) - theory_fn(FIDUCIAL)
+    np.testing.assert_array_equal(factor, expected)
 
 
-class EmptyLikelihood(Likelihood):
-    """
-    empty mock likelihood based on:
-    https://github.com/LSSTDESC/firecrown/blob/master/tests/likelihood/lkdir/lkmodule.py
-    """
-    def __init__(self):
-        self.nothing = 1.0
-        self._data_vector = np.array([1.0, 2.0, 3.0])
-        self._covariance = np.eye(3) * 0.1
-        super().__init__()
+def test_concealing_factor_mult_is_theory_ratio(theory_fn):
+    factor = concealing_factor(FIDUCIAL, SHIFTS, seed=SEED, theory_fn=theory_fn,
+                               factor_type="mult")
 
-    def read(self, sacc_data: sacc.Sacc):
-        pass
+    deltas = draw_param_shifts(SHIFTS, SEED, shift_distr="flat")
+    concealed = {k: FIDUCIAL[k] + deltas.get(k, 0.0) for k in FIDUCIAL}
+    expected = theory_fn(concealed) / theory_fn(FIDUCIAL)
+    np.testing.assert_array_equal(factor, expected)
 
-    def compute_loglike(self, ModellingTools):
-        return -self.nothing*2.0
 
-    def compute_theory_vector(self, ModellingTools):
-        return self.nothing
-
-    def get_data_vector(self):
-        return self._data_vector
-
-    def get_cov(self):
-        return self._covariance
-
-
-class MockLikelihoodModule(types.ModuleType):
-    def build_likelihood(self, *args, **kwargs):
-        self.mocktools = ModelingTools()
-        self.mocklike = EmptyLikelihood()
-        return self.mocklike, self.mocktools
-
-    def compute_theory_vector(self, ModellingTools):
-        return self.mocklike.compute_theory_vector(ModellingTools)
-
-
-class MockCosmo:
-    def __init__(self, params):
-        self._params = params
-
-    def __getitem__(self, key):
-        return self._params[key]
-
-
-def test_smokescreen_init():
-    # Create mock inputs
-    cosmo = COSMO
-    sacc_data = sacc.Sacc()
-    # Add a misc tracer and data points to set up the SACC object properly
-    sacc_data.add_tracer('misc', 'test')
-    n_data = 3
-    for i in range(n_data):
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('test', 'test'), 1.0, ell=10)
-    # Set mean to match EmptyLikelihood's get_data_vector() return value
-    sacc_data.mean = np.array([1.0, 2.0, 3.0])
-    sacc_data.add_covariance(np.eye(n_data) * 0.1)
-    likelihood = MockLikelihoodModule("mock_likelihood")
-    systematics_dict = {"systematic1": 0.1}
-    shifts_dict = {"Omega_c": 1}
-
-    # Check that Smokescreen can be instantiated with valid inputs
-    smokescreen = ConcealDataVector(cosmo, likelihood,
-                                    shifts_dict, sacc_data, systematics_dict)
-    assert isinstance(smokescreen, ConcealDataVector)
-
-    # Check that Smokescreen raises an error when given an invalid likelihood
-    with pytest.raises(AttributeError):
-        invalid_likelihood = types.ModuleType("invalid_likelihood")
-        ConcealDataVector(cosmo, invalid_likelihood,
-                          shifts_dict, sacc_data, systematics_dict)
-
-    # check if breaks if given a shift with a key not in the cosmology parameters
-    with pytest.raises(ValueError):
-        invalid_shifts_dict = {"Omega_c": 1, "invalid_key": 1}
-        ConcealDataVector(cosmo, likelihood,
-                          invalid_shifts_dict, sacc_data, systematics_dict)
-
-
-def test_load_shifts():
-    # Create mock inputs
-    cosmo = COSMO
-    sacc_data = sacc.Sacc()
-    # Add a misc tracer and data points to set up the SACC object properly
-    sacc_data.add_tracer('misc', 'test')
-    n_data = 3
-    for i in range(n_data):
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('test', 'test'), 1.0, ell=10)
-    # Set mean to match EmptyLikelihood's get_data_vector() return value
-    sacc_data.mean = np.array([1.0, 2.0, 3.0])
-    sacc_data.add_covariance(np.eye(3) * 0.1)
-    likelihood = MockLikelihoodModule("mock_likelihood")
-    systematics_dict = {"systematic1": 0.1}
-    shifts_dict = {"Omega_c": 1, "Omega_b": (-1, 2), "sigma8": (2, 3)}
-
-    # Instantiate Smokescreen
-    smokescreen = ConcealDataVector(cosmo, likelihood,
-                                    shifts_dict, sacc_data, systematics_dict)
-
-    # Call load_shifts and get the result
-    shifts = smokescreen._load_shifts(seed="2112")
-
-    # Check that the shifts are correct
-    assert shifts["Omega_c"] == 1
-    assert shifts["Omega_c"] >= 0 and shifts["Omega_b"] <= 3
-    assert shifts["sigma8"] >= 2 and shifts["sigma8"] <= 3
-
-    # Check that an error is raised for an invalid tuple
-    smokescreen.shifts_dict["Omega_c"] = (1,)
-    with pytest.raises(ValueError):
-        smokescreen._load_shifts(seed="2112")
-
-    # check if breaks if given a shift with a key not in the cosmology parameters
-    smokescreen.shifts_dict["invalid_key"] = 1
-    with pytest.raises(ValueError):
-        smokescreen._load_shifts(seed="2112")
-
-    # check if break if a a shift type is not flat
-    with pytest.raises(NotImplementedError):
-        smokescreen._load_shifts(seed="2112", shift_distr="invalid")
-    with pytest.raises(NotImplementedError):
-        smokescreen = ConcealDataVector(cosmo, likelihood, shifts_dict, sacc_data,
-                                        systematics_dict,
-                                        **{'shift_distr': 'invalid'})
-
-
-def test_load_shifts_gaussian():
-    # Create mock inputs
-    cosmo = COSMO
-    sacc_data = sacc.Sacc()
-    # Add a misc tracer and data points to set up the SACC object properly
-    sacc_data.add_tracer('misc', 'test')
-    n_data = 3
-    for i in range(n_data):
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('test', 'test'), 1.0, ell=10)
-    # Set mean to match EmptyLikelihood's get_data_vector() return value
-    sacc_data.mean = np.array([1.0, 2.0, 3.0])
-    sacc_data.add_covariance(np.eye(3) * 0.1)
-    likelihood = MockLikelihoodModule("mock_likelihood")
-    systematics_dict = {"systematic1": 0.1}
-    shifts_dict = {"Omega_c": (0.3, 0.02), "Omega_b": (0.05, 0.002), "sigma8": (0.82, 0.02)}
-
-    # Instantiate Smokescreen
-    smokescreen = ConcealDataVector(cosmo, likelihood,
-                                    shifts_dict, sacc_data, systematics_dict,
-                                    **{'shift_distr': 'gaussian'})
-
-    # Call load_shifts and get the result
-    shifts = smokescreen._load_shifts(seed="2112", shift_distr="gaussian")
-
-    # Check that the shifts are correct
-    assert shifts["Omega_c"] >= 0.1 and shifts["Omega_c"] <= 0.4
-    assert shifts["Omega_b"] >= 0.01 and shifts["Omega_b"] <= 0.05
-    assert shifts["sigma8"] >= 0.5 and shifts["sigma8"] <= 1.2
-
-
-def test_verify_sacc_consistency_matching():
-    # Create mock inputs
-    cosmo = COSMO
-    sacc_data = sacc.Sacc()
-    # Add a misc tracer and data points to set up the SACC object properly
-    sacc_data.add_tracer('misc', 'test')
-    n_data = 3
-    for i in range(n_data):
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('test', 'test'), 1.0, ell=10)
-    # Set mean to match EmptyLikelihood's get_data_vector() return value
-    sacc_data.mean = np.array([1.0, 2.0, 3.0])
-    sacc_data.add_covariance(np.eye(3) * 0.1)
-    likelihood = MockLikelihoodModule("mock_likelihood")
-    systematics_dict = {"systematic1": 0.1}
-    shifts_dict = {"Omega_c": 1}
-
-    smokescreen = ConcealDataVector(cosmo, likelihood,
-                                    shifts_dict, sacc_data, systematics_dict)
-
-    # Create a mock likelihood with matching data
-    mock_likelihood = MagicMock()
-    mock_likelihood.get_data_vector.return_value = np.array([1.0, 2.0, 3.0])
-    mock_likelihood.get_cov.return_value = np.eye(3) * 0.1
-
-    # Test that no error is raised for matching data
-    smokescreen._verify_sacc_consistency(mock_likelihood)
-
-
-def test_verify_sacc_consistency_mismatch_data_vector():
-    # Create mock inputs
-    cosmo = COSMO
-    sacc_data = sacc.Sacc()
-    # Add a misc tracer and data points to set up the SACC object properly
-    sacc_data.add_tracer('misc', 'test')
-    n_data = 3
-    for i in range(n_data):
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('test', 'test'), 1.0, ell=10)
-    # Set mean to match EmptyLikelihood's get_data_vector() return value
-    sacc_data.mean = np.array([1.0, 2.0, 3.0])
-    sacc_data.add_covariance(np.eye(3) * 0.1)
-    likelihood = MockLikelihoodModule("mock_likelihood")
-    systematics_dict = {"systematic1": 0.1}
-    shifts_dict = {"Omega_c": 1}
-
-    smokescreen = ConcealDataVector(cosmo, likelihood,
-                                    shifts_dict, sacc_data, systematics_dict)
-
-    # Create a mock likelihood with mismatched data vector
-    mock_likelihood = MagicMock()
-    mock_likelihood.get_data_vector.return_value = np.array([2.0, 3.0, 4.0])  # Different values
-    mock_likelihood.get_cov.return_value = np.eye(3) * 0.1
-
-    # Test that ValueError is raised for mismatched data vector
-    with pytest.raises(ValueError) as exc_info:
-        smokescreen._verify_sacc_consistency(mock_likelihood)
-
-    assert "Data vector mismatch" in str(exc_info.value)
-
-
-def test_verify_sacc_consistency_mismatch_covariance():
-    # Create mock inputs
-    cosmo = COSMO
-    sacc_data = sacc.Sacc()
-    # Add a misc tracer and data points to set up the SACC object properly
-    sacc_data.add_tracer('misc', 'test')
-    n_data = 3
-    for i in range(n_data):
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('test', 'test'), 1.0, ell=10)
-    # Set mean to match EmptyLikelihood's get_data_vector() return value
-    sacc_data.mean = np.array([1.0, 2.0, 3.0])
-    sacc_data.add_covariance(np.eye(3) * 0.1)
-    likelihood = MockLikelihoodModule("mock_likelihood")
-    systematics_dict = {"systematic1": 0.1}
-    shifts_dict = {"Omega_c": 1}
-
-    smokescreen = ConcealDataVector(cosmo, likelihood,
-                                    shifts_dict, sacc_data, systematics_dict)
-
-    # Create a mock likelihood with mismatched covariance
-    mock_likelihood = MagicMock()
-    mock_likelihood.get_data_vector.return_value = np.array([1.0, 2.0, 3.0])
-    mock_likelihood.get_cov.return_value = np.eye(3) * 0.5  # Different variance
-
-    # Test that ValueError is raised for mismatched covariance
-    with pytest.raises(ValueError) as exc_info:
-        smokescreen._verify_sacc_consistency(mock_likelihood)
-
-    assert "Covariance matrix mismatch" in str(exc_info.value)
-
-
-class EmptyLikelihoodNoCov(Likelihood):
-    """Empty mock likelihood that returns None for covariance."""
-    def __init__(self):
-        self.nothing = 1.0
-        self._data_vector = np.array([1.0, 2.0, 3.0])
-        super().__init__()
-
-    def read(self, sacc_data: sacc.Sacc):
-        pass
-
-    def compute_loglike(self, ModellingTools):
-        return -self.nothing*2.0
-
-    def compute_theory_vector(self, ModellingTools):
-        return self.nothing
-
-    def get_data_vector(self):
-        return self._data_vector
-
-    def get_cov(self):
-        return None
-
-
-def test_verify_sacc_consistency_none_covariance():
-    # Create mock inputs where user has None covariance but likelihood has one
-    cosmo = COSMO
-    sacc_data = sacc.Sacc()
-    # Add a misc tracer and data points to set up the SACC object properly
-    sacc_data.add_tracer('misc', 'test')
-    n_data = 3
-    for i in range(n_data):
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('test', 'test'), 1.0, ell=10)
-    # Set mean to match EmptyLikelihood's get_data_vector() return value
-    # Explicitly set covariance to None
-    sacc_data.mean = np.array([1.0, 2.0, 3.0])
-    sacc_data.covariance = None
-
-    systematics_dict = {"systematic1": 0.1}
-    shifts_dict = {"Omega_c": 1}
-
-    # Create a mock module that has build_likelihood returning EmptyLikelihoodNoCov
-    # (which returns None for covariance, so __init__ will succeed)
-    # Must accept build_parameters argument as required by _test_likelihood
-    mock_module = types.ModuleType("mock_likelihood")
-    mock_module.build_likelihood = lambda bp: (EmptyLikelihoodNoCov(), ModelingTools())
-
-    smokescreen = ConcealDataVector(cosmo, mock_module,
-                                    shifts_dict, sacc_data, systematics_dict)
-
-    # Test that ValueError is raised when user has None but likelihood has covariance
-    # Use a mock likelihood with covariance (different from the one used in __init__)
-    mock_likelihood = MagicMock()
-    mock_likelihood.get_data_vector.return_value = np.array([1.0, 2.0, 3.0])
-    mock_likelihood.get_cov.return_value = np.eye(3) * 0.1
-
-    with pytest.raises(ValueError) as exc_info:
-        smokescreen._verify_sacc_consistency(mock_likelihood)
-
-    assert "Likelihood has covariance but user-provided SACC" in str(exc_info.value)
-
-
-def test_verify_sacc_consistency_none_covariance_reverse():
-    # Create mock inputs where user has covariance but likelihood returns None
-    cosmo = COSMO
-    sacc_data = sacc.Sacc()
-    # Add a misc tracer and data points to set up the SACC object properly
-    sacc_data.add_tracer('misc', 'test')
-    n_data = 3
-    for i in range(n_data):
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('test', 'test'), 1.0, ell=10)
-    # Add a proper covariance to the SACC object
-    n_data = 3
-    sacc_data.mean = np.array([1.0, 2.0, 3.0])
-    sacc_data.add_covariance(np.eye(n_data) * 0.1)
-
-    likelihood = MockLikelihoodModule("mock_likelihood")
-    systematics_dict = {"systematic1": 0.1}
-    shifts_dict = {"Omega_c": 1}
-
-    smokescreen = ConcealDataVector(cosmo, likelihood,
-                                    shifts_dict, sacc_data, systematics_dict)
-
-    # Create a mock likelihood that returns None for covariance
-    mock_likelihood = MagicMock()
-    mock_likelihood.get_data_vector.return_value = np.array([1.0, 2.0, 3.0])
-    mock_likelihood.get_cov.return_value = None
-
-    # Test that ValueError is raised when likelihood has None but user has covariance
-    with pytest.raises(ValueError) as exc_info:
-        smokescreen._verify_sacc_consistency(mock_likelihood)
-
-    assert "User-provided SACC has covariance but likelihood returns None for covariance." in str(exc_info.value)
-
-
-def test_debug_mode(capfd):
-    # Create mock inputs
-    cosmo = COSMO
-    sacc_data = sacc.Sacc()
-    # Add a misc tracer and data points to set up the SACC object properly
-    sacc_data.add_tracer('misc', 'test')
-    n_data = 3
-    for i in range(n_data):
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('test', 'test'), 1.0, ell=10)
-    # Set mean to match EmptyLikelihood's get_data_vector() return value
-    sacc_data.mean = np.array([1.0, 2.0, 3.0])
-    sacc_data.add_covariance(np.eye(3) * 0.1)
-    likelihood = MockLikelihoodModule("mock_likelihood")
-    systematics_dict = {"systematic1": 0.1}
-    shifts_dict = {"Omega_c": 1}
-
-    # Check that Smokescreen can be instantiated with valid inputs
-    _ = ConcealDataVector(cosmo, likelihood,
-                          shifts_dict, sacc_data, systematics_dict,
-                          **{'debug': True})
-    # Capture the output
-    out, err = capfd.readouterr()
-
-    # Check that the debug output is correct
-    assert "[DEBUG] Shifts: " in out
-    assert "[DEBUG] Concealed Cosmology: " in out
-    assert f"{shifts_dict}" in out
-
-
-def test_calculate_concealing_factor_add():
-    # Create mock inputs
-    cosmo = COSMO
-    sacc_data = sacc.Sacc()
-    # Add a misc tracer and data points to set up the SACC object properly
-    sacc_data.add_tracer('misc', 'test')
-    n_data = 3
-    for i in range(n_data):
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('test', 'test'), 1.0, ell=10)
-    # Set mean to match EmptyLikelihood's get_data_vector() return value
-    sacc_data.mean = np.array([1.0, 2.0, 3.0])
-    sacc_data.add_covariance(np.eye(3) * 0.1)
-    likelihood = MockLikelihoodModule("mock_likelihood")
-    systematics_dict = {"systematic1": 0.1}
-    shifts_dict = {"Omega_c": 1}
-
-    # Instantiate Smokescreen
-    smokescreen = ConcealDataVector(cosmo, likelihood,
-                                    shifts_dict, sacc_data, systematics_dict,
-                                    **{'debug': True})
-
-    # Call calculate_concealing_factor with type="add"
-    concealing_factor = smokescreen.calculate_concealing_factor(factor_type="add")
-
-    # Check that the concealing (blinding) factor is correct
-    assert concealing_factor == smokescreen.theory_vec_conceal - smokescreen.theory_vec_fid
-
-
-def test_calculate_concealing_factor_add_gaussian():
-    # Create mock inputs
-    cosmo = COSMO
-    sacc_data = sacc.Sacc()
-    # Add a misc tracer and data points to set up the SACC object properly
-    sacc_data.add_tracer('misc', 'test')
-    n_data = 3
-    for i in range(n_data):
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('test', 'test'), 1.0, ell=10)
-    # Set mean to match EmptyLikelihood's get_data_vector() return value
-    sacc_data.mean = np.array([1.0, 2.0, 3.0])
-    sacc_data.add_covariance(np.eye(3) * 0.1)
-    likelihood = MockLikelihoodModule("mock_likelihood")
-    systematics_dict = {"systematic1": 0.1}
-    shifts_dict = {"Omega_c": (0.3, 0.02), "Omega_b": (0.05, 0.002), "sigma8": (0.82, 0.02)}
-
-    # Instantiate Smokescreen
-    smokescreen = ConcealDataVector(cosmo, likelihood,
-                                    shifts_dict, sacc_data, systematics_dict,
-                                    **{'debug': True, 'shift_distr': 'gaussian'})
-
-    # Call calculate_concealing_factor with type="add"
-    concealing_factor = smokescreen.calculate_concealing_factor(factor_type="add")
-
-    # Check that the concealing (blinding) factor is correct
-    assert concealing_factor == smokescreen.theory_vec_conceal - smokescreen.theory_vec_fid
-
-
-def test_calculate_concealing_factor_mult():
-    # Create mock inputs
-    cosmo = COSMO
-    sacc_data = sacc.Sacc()
-    # Add a misc tracer and data points to set up the SACC object properly
-    sacc_data.add_tracer('misc', 'test')
-    n_data = 3
-    for i in range(n_data):
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('test', 'test'), 1.0, ell=10)
-    # Set mean to match EmptyLikelihood's get_data_vector() return value
-    sacc_data.mean = np.array([1.0, 2.0, 3.0])
-    sacc_data.add_covariance(np.eye(3) * 0.1)
-    likelihood = MockLikelihoodModule("mock_likelihood")
-    systematics_dict = {"systematic1": 0.1}
-    shifts_dict = {"Omega_c": 1}
-
-    # Instantiate Smokescreen
-    smokescreen = ConcealDataVector(cosmo, likelihood,
-                                    shifts_dict, sacc_data, systematics_dict,
-                                    **{'debug': True})
-
-    # Call calculate_concealing_factor with type="add"
-    concealing_factor = smokescreen.calculate_concealing_factor(factor_type="mult")
-
-    # Check that the concealing (blinding) factor is correct
-    assert concealing_factor == smokescreen.theory_vec_conceal / smokescreen.theory_vec_fid
-
-
-def test_calculate_concealing_factor_invalid_type():
-    # Create mock inputs
-    cosmo = COSMO
-    sacc_data = sacc.Sacc()
-    # Add a misc tracer and data points to set up the SACC object properly
-    sacc_data.add_tracer('misc', 'test')
-    n_data = 3
-    for i in range(n_data):
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('test', 'test'), 1.0, ell=10)
-    # Set mean to match EmptyLikelihood's get_data_vector() return value
-    sacc_data.mean = np.array([1.0, 2.0, 3.0])
-    sacc_data.add_covariance(np.eye(3) * 0.1)
-    likelihood = MockLikelihoodModule("mock_likelihood")
-    systematics_dict = {"systematic1": 0.1}
-    shifts_dict = {"Omega_c": 1}
-
-    # Instantiate Smokescreen
-    smokescreen = ConcealDataVector(cosmo, likelihood,
-                                    shifts_dict, sacc_data, systematics_dict)
-
-    # Call calculate_concealing_factor with an invalid type
-    with pytest.raises(NotImplementedError):
-        smokescreen.calculate_concealing_factor(factor_type="invalid")
-
-
-def test_apply_concealing_to_likelihood_datavec_add():
-    # Create mock inputs
-    cosmo = COSMO
-    sacc_data = sacc.Sacc()
-    # Add a misc tracer and data points to set up the SACC object properly
-    sacc_data.add_tracer('misc', 'test')
-    n_data = 3
-    for i in range(n_data):
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('test', 'test'), 1.0, ell=10)
-    # Set mean to match EmptyLikelihood's get_data_vector() return value
-    sacc_data.mean = np.array([1.0, 2.0, 3.0])
-    sacc_data.add_covariance(np.eye(3) * 0.1)
-    likelihood = MockLikelihoodModule("mock_likelihood")
-    systematics_dict = {"systematic1": 0.1}
-    shifts_dict = {"Omega_c": 1}
-
-    # Instantiate Smokescreen
-    smokescreen = ConcealDataVector(cosmo, likelihood,
-                                    shifts_dict, sacc_data, systematics_dict,
-                                    **{'debug': True})
-
-    # Set the concealing (blinding) factor and type
-    # Call calculate_concealing_factor with type="add"
-    concealing_factor = smokescreen.calculate_concealing_factor(factor_type="add")
-
-    # Call apply_blinding_to_likelihood_datavec
-    concealed_data_vector = smokescreen.apply_concealing_to_likelihood_datavec()
-    expected_concealed = smokescreen.likelihood.get_data_vector() + concealing_factor
-
-    # Check that the blinded data vector is correct
-    np.testing.assert_array_equal(concealed_data_vector, expected_concealed)
-
-
-def test_apply_concealing_to_likelihood_datavec_mult():
-    # Create mock inputs
-    cosmo = COSMO
-    sacc_data = sacc.Sacc()
-    # Add a misc tracer and data points to set up the SACC object properly
-    sacc_data.add_tracer('misc', 'test')
-    n_data = 3
-    for i in range(n_data):
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('test', 'test'), 1.0, ell=10)
-    # Set mean to match EmptyLikelihood's get_data_vector() return value
-    sacc_data.mean = np.array([1.0, 2.0, 3.0])
-    sacc_data.add_covariance(np.eye(3) * 0.1)
-    likelihood = MockLikelihoodModule("mock_likelihood")
-    systematics_dict = {"systematic1": 0.1}
-    shifts_dict = {"Omega_c": 1}
-
-    # Instantiate Smokescreen
-    smokescreen = ConcealDataVector(cosmo, likelihood,
-                                    shifts_dict, sacc_data, systematics_dict,
-                                    **{'debug': True})
-
-    # Set the concealing (blinding) factor and type
-    # Call calculate_concealing_factor with type="add"
-    concealing_factor = smokescreen.calculate_concealing_factor(factor_type="mult")
-
-    # Call apply_concealing_to_likelihood_datavec
-    concealed_data_vector = smokescreen.apply_concealing_to_likelihood_datavec()
-    expected_concealing = smokescreen.likelihood.get_data_vector() * concealing_factor
-
-    # Check that the concealing (blinding) data vector is correct
-    np.testing.assert_array_equal(concealed_data_vector, expected_concealing)
-
-
-def test_apply_concealing_to_likelihood_datavec_invalid_type():
-    # Create mock inputs
-    cosmo = COSMO
-    sacc_data = sacc.Sacc()
-    # Add a misc tracer and data points to set up the SACC object properly
-    sacc_data.add_tracer('misc', 'test')
-    n_data = 3
-    for i in range(n_data):
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('test', 'test'), 1.0, ell=10)
-    # Set mean to match EmptyLikelihood's get_data_vector() return value
-    sacc_data.mean = np.array([1.0, 2.0, 3.0])
-    sacc_data.add_covariance(np.eye(3) * 0.1)
-    likelihood = MockLikelihoodModule("mock_likelihood")
-    systematics_dict = {"systematic1": 0.1}
-    shifts_dict = {"Omega_c": 1}
-
-    # Instantiate Smokescreen
-    smokescreen = ConcealDataVector(cosmo, likelihood,
-                                    shifts_dict, sacc_data, systematics_dict,
-                                    **{'debug': True})
-
-    # Set the expected_concealing factor and type
-    # Call calculate_concealing_factor with type="add"
-    _ = smokescreen.calculate_concealing_factor(factor_type="mult")
-    # Set an invalid type
-    smokescreen.factor_type = "invalid"
-    with pytest.raises(NotImplementedError):
-        smokescreen.apply_concealing_to_likelihood_datavec()
-
-
-def test_load_likelihood():
-    # Create mock inputs using a 3-element SACC file to match EmptyLikelihood
-    cosmo = COSMO
-    sacc_data = sacc.Sacc()
-    sacc_data.add_tracer('misc', 'test')
-    for i in range(3):
-        sacc_data.add_data_point('galaxy_shear_cl_ee', ('test', 'test'), 1.0, ell=10)
-    sacc_data.mean = np.array([1.0, 2.0, 3.0])
-    sacc_data.add_covariance(np.eye(3) * 0.1)
-
-    likelihood = MockLikelihoodModule("mock_likelihood")
-    systematics_dict = {"systematic1": 0.1}
-    shifts_dict = {"Omega_c": 1}
-
-    # Create Smokescreen instance (this works because data vectors match)
-    smokescreen = ConcealDataVector(cosmo, likelihood,
-                                    shifts_dict, sacc_data, systematics_dict)
-
-    # Test with an invalid likelihood (neither a module nor a file path)
+def test_concealing_factor_needs_no_sacc_and_no_backend(theory_fn):
+    # the core takes a theory_fn explicitly and never reaches for a default
+    # backend, so it stays free of pyccl and of any data container
+    factor = concealing_factor(FIDUCIAL, SHIFTS, seed=SEED, theory_fn=theory_fn)
+    assert factor.shape == (5,)
     with pytest.raises(TypeError):
-        smokescreen._load_likelihood(123, sacc_data)
-
-    # Test with a non-existent likelihood file path
-    with pytest.raises(FileNotFoundError):
-        smokescreen._load_likelihood("/path/to/nonexistent/file.py", sacc_data)
-
-    # Test with a module that doesn't have a 'build_likelihood' method
-    invalid_likelihood = types.ModuleType("invalid_likelihood")
-    with pytest.raises(AttributeError):
-        smokescreen._load_likelihood(invalid_likelihood, sacc_data)
-
-    # Test with a module that doesn't have a 'build_parameters' input
-    invalid_likelihood = types.ModuleType("invalid_likelihood")
-    invalid_likelihood.build_likelihood = lambda: None
-    with pytest.raises(AssertionError):
-        smokescreen._load_likelihood(invalid_likelihood, sacc_data)
+        concealing_factor(FIDUCIAL, SHIFTS, seed=SEED)
 
 
-@patch('src.smokescreen.datavector.getpass.getuser', return_value='test_user')
-def test_save_concealed_datavector(mock_getuser, cosmic_shear_resources, tmp_path):
-    # Create mock inputs using fixture resources
-    cosmo = COSMO
-    likelihood = cosmic_shear_resources['likelihood']
-    syst_dict = {
-        "trc1_delta_z": 0.1,
-        "trc0_delta_z": 0.1,
-    }
-    shift_dict = {"Omega_c": 0.34, "sigma8": 0.85}
-    sacc_data = sacc.Sacc.load_fits(cosmic_shear_resources['fits_sacc'])
-    sck = ConcealDataVector(cosmo, likelihood,
-                            shift_dict, sacc_data, syst_dict, seed=1234)
-
-    # Calculate the concealing factor and apply it to the likelihood data vector
-    sck.calculate_concealing_factor()
-    blinded_dv = sck.apply_concealing_to_likelihood_datavec()
-
-    # Save the blinded data vector to a temporary file in tmp_path
-    temp_file_path = str(tmp_path)
-    temp_file_root = "temp_sacc"
-    temp_file_name = f"{temp_file_path}/{temp_file_root}_concealed_data_vector.fits"
-    returned_sacc = sck.save_concealed_datavector(temp_file_path,
-                                                  temp_file_root,
-                                                  return_sacc=True)
-    # checks if the return is a sacc object
-    assert isinstance(returned_sacc, sacc.Sacc)
-
-    returned_sacc = sck.save_concealed_datavector(temp_file_path,
-                                                  temp_file_root,
-                                                  return_sacc=False)
-
-    # Check that the return is None
-    assert returned_sacc is None
-
-    # Check that the file was created
-    assert os.path.exists(temp_file_name)
-
-    # Load the file and check that the data vector matches the blinded data vector
-    loaded_sacc = sacc.Sacc.load_fits(temp_file_name)
-    np.testing.assert_array_equal(loaded_sacc.mean, blinded_dv)
-
-    info_str = 'Concealed (blinded) data-vector, created by Smokescreen.'
-    assert loaded_sacc.metadata['concealed'] is True
-    assert loaded_sacc.metadata['creator'] == mock_getuser.return_value
-    assert loaded_sacc.metadata['creation'][:10] == datetime.date.today().isoformat()
-    assert loaded_sacc.metadata['info'] == info_str
-    assert loaded_sacc.metadata['seed_smokescreen'] == 1234
-    # File cleanup handled by tmp_path context manager
+def test_concealing_factor_rejects_unknown_shift_key(theory_fn):
+    with pytest.raises(ValueError, match="omega_c"):
+        concealing_factor(FIDUCIAL, {"omega_c": 0.05}, seed=SEED,
+                          theory_fn=theory_fn)
 
 
-@patch('src.smokescreen.datavector.getpass.getuser', return_value='test_user')
-def test_save_concealed_datavector_hdf5(mock_getuser):
-    # Create mock inputs using an HDF5 SACC file to ensure input_format is 'hdf5'
-    cosmo = COSMO
-    likelihood = "./examples/cosmic_shear/cosmicshear_likelihood.py"
-    syst_dict = {
-        "trc1_delta_z": 0.1,
-        "trc0_delta_z": 0.1,
-    }
-    shift_dict = {"Omega_c": 0.34, "sigma8": 0.85}
-
-    # Load from HDF5 source
-    sacc_data = sacc.Sacc.load_hdf5("./examples/cosmic_shear/cosmicshear_sacc.hdf5")
-
-    # Create ConcealDataVector with input_format='hdf5'
-    sck = ConcealDataVector(cosmo, likelihood,
-                            shift_dict, sacc_data, syst_dict, seed=1234,
-                            **{'input_format': 'hdf5'})
-
-    # Calculate the concealing factor and apply it to the likelihood data vector
-    sck.calculate_concealing_factor()
-    blinded_dv = sck.apply_concealing_to_likelihood_datavec()
-
-    # Save the blinded data vector to a temporary HDF5 file
-    temp_file_path = "./tests/"
-    temp_file_root = "temp_sacc_hdf5"
-    temp_file_name = f"{temp_file_path}{temp_file_root}_concealed_data_vector.hdf5"
-
-    # Save with output_format='hdf5' to test HDF5 output
-    returned_sacc = sck.save_concealed_datavector(temp_file_path,
-                                                  temp_file_root,
-                                                  return_sacc=True,
-                                                  output_format='hdf5')
-
-    # Check that the return is a sacc object
-    assert isinstance(returned_sacc, sacc.Sacc)
-
-    # Check that the file was created with .hdf5 extension
-    assert os.path.exists(temp_file_name)
-    # Verify it's an HDF5 file by checking extension in path
-    assert temp_file_name.endswith('.hdf5')
-
-    # Load the HDF5 file and check that the data vector matches
-    loaded_sacc = sacc.Sacc.load_hdf5(temp_file_name)
-    np.testing.assert_array_equal(loaded_sacc.mean, blinded_dv)
-
-    # Check metadata
-    info_str = 'Concealed (blinded) data-vector, created by Smokescreen.'
-    assert loaded_sacc.metadata['concealed'] is True
-    assert loaded_sacc.metadata['creator'] == mock_getuser.return_value
-    assert loaded_sacc.metadata['info'] == info_str
-
-    # Clean up the temporary file
-    os.remove(temp_file_name)
+def test_concealing_factor_rejects_unknown_factor_type(theory_fn):
+    with pytest.raises(NotImplementedError):
+        concealing_factor(FIDUCIAL, SHIFTS, seed=SEED, theory_fn=theory_fn,
+                          factor_type="subtract")
 
 
-@patch('src.smokescreen.datavector.getpass.getuser', return_value='test_user')
-def test_save_concealed_datavector_hdf5_from_fits_input(mock_getuser):
-    # Test that when input format is FITS but output format is explicitly set to HDF5,
-    # the file is saved with .hdf5 extension
-    cosmo = COSMO
-    likelihood = "./examples/cosmic_shear/cosmicshear_likelihood.py"
-    syst_dict = {
-        "trc1_delta_z": 0.1,
-        "trc0_delta_z": 0.1,
-    }
-    shift_dict = {"Omega_c": 0.34, "sigma8": 0.85}
-
-    # Load from FITS source
-    sacc_data = sacc.Sacc.load_fits("./examples/cosmic_shear/cosmicshear_sacc.fits")
-
-    # Create ConcealDataVector with input_format='fits'
-    sck = ConcealDataVector(cosmo, likelihood,
-                            shift_dict, sacc_data, syst_dict, seed=1234,
-                            **{'input_format': 'fits'})
-
-    # Calculate the concealing factor and apply it
-    sck.calculate_concealing_factor()
-    blinded_dv = sck.apply_concealing_to_likelihood_datavec()
-
-    # Save with explicit HDF5 output format
-    temp_file_path = "./tests/"
-    temp_file_root = "temp_sacc_hdf5_from_fits"
-    temp_file_name = f"{temp_file_path}{temp_file_root}_concealed_data_vector.hdf5"
-
-    returned_sacc = sck.save_concealed_datavector(temp_file_path,
-                                                  temp_file_root,
-                                                  return_sacc=True,
-                                                  output_format='hdf5')
-
-    assert isinstance(returned_sacc, sacc.Sacc)
-    assert os.path.exists(temp_file_name)
-
-    # Verify it can be loaded as HDF5
-    loaded_sacc = sacc.Sacc.load_hdf5(temp_file_name)
-    np.testing.assert_array_equal(loaded_sacc.mean, blinded_dv)
-
-    os.remove(temp_file_name)
+def test_factor_from_params_is_the_undrawn_half(theory_fn):
+    # concealing_factor == draw + factor_from_params, so a caller holding its
+    # own hidden point reaches the same factor without drawing again.
+    shifts = draw_param_shifts(SHIFTS, SEED)
+    concealed = {k: FIDUCIAL[k] + shifts.get(k, 0.0) for k in FIDUCIAL}
+    np.testing.assert_array_equal(
+        factor_from_params(FIDUCIAL, concealed, theory_fn=theory_fn),
+        concealing_factor(FIDUCIAL, SHIFTS, seed=SEED, theory_fn=theory_fn),
+    )
 
 
-@patch('src.smokescreen.datavector.getpass.getuser', return_value='test_user')
-def test_save_concealed_datavector_default_format_uses_input_format(mock_getuser):
-    # Test that when output_format is not specified, it defaults to input format
-    cosmo = COSMO
-    likelihood = "./examples/cosmic_shear/cosmicshear_likelihood.py"
-    syst_dict = {
-        "trc1_delta_z": 0.1,
-        "trc0_delta_z": 0.1,
-    }
-    shift_dict = {"Omega_c": 0.34, "sigma8": 0.85}
-
-    # Test with HDF5 input - output should also be HDF5 (.hdf5)
-    sacc_data_hdf5, _ = load_sacc_file("./examples/cosmic_shear/cosmicshear_sacc.hdf5")
-    sck = ConcealDataVector(cosmo, likelihood,
-                            shift_dict, sacc_data_hdf5, syst_dict, seed=1234)
-
-    sck.calculate_concealing_factor()
-    blinded_dv = sck.apply_concealing_to_likelihood_datavec()
-
-    temp_file_path = "./tests/"
-    temp_file_root = "temp_sacc_default_hdf5"
-
-    # Don't specify output_format - should use input format (hdf5)
-    returned_sacc = sck.save_concealed_datavector(temp_file_path,
-                                                  temp_file_root,
-                                                  return_sacc=True)
-
-    assert isinstance(returned_sacc, sacc.Sacc)
-
-    # Check that the file has .hdf5 extension (from HDF5 input format)
-    expected_hdf5_name = f"{temp_file_path}{temp_file_root}_concealed_data_vector.hdf5"
-    assert os.path.exists(expected_hdf5_name)
-
-    # Verify it can be loaded as HDF5
-    loaded_sacc = sacc.Sacc.load_hdf5(expected_hdf5_name)
-    np.testing.assert_array_equal(loaded_sacc.mean, blinded_dv)
-
-    os.remove(expected_hdf5_name)
+def test_factor_from_params_rejects_unknown_factor_type(theory_fn):
+    with pytest.raises(NotImplementedError):
+        factor_from_params(FIDUCIAL, FIDUCIAL, theory_fn=theory_fn,
+                           factor_type="subtract")
 
 
-@patch('src.smokescreen.datavector.getpass.getuser', return_value='test_user')
-def test_save_concealed_datavector_custom_suffix(mock_getuser):
-    cosmo = COSMO
-    likelihood = "./examples/cosmic_shear/cosmicshear_likelihood.py"
-    syst_dict = {
-        "trc1_delta_z": 0.1,
-        "trc0_delta_z": 0.1,
-    }
-    shift_dict = {"Omega_c": 0.34, "sigma8": 0.85}
-    sacc_data, _ = load_sacc_file("./examples/cosmic_shear/cosmicshear_sacc.fits")
-    sck = ConcealDataVector(cosmo, likelihood, shift_dict, sacc_data, syst_dict, seed=1234)
-    sck.calculate_concealing_factor()
-    sck.apply_concealing_to_likelihood_datavec()
-
-    temp_file_path = "./tests/"
-    temp_file_root = "temp_sacc_custom_suffix"
-
-    sck.save_concealed_datavector(temp_file_path, temp_file_root, suffix="my_blind")
-
-    expected_path = f"{temp_file_path}{temp_file_root}_my_blind.fits"
-    default_path = f"{temp_file_path}{temp_file_root}_concealed_data_vector.fits"
-
-    assert os.path.exists(expected_path)
-    assert not os.path.exists(default_path)
-
-    os.remove(expected_path)
+def test_class_factor_matches_pure_core(sacc_data, theory_fn):
+    # the class is an adapter: same seed, same shifts, same factor
+    cdv = ConcealDataVector(FIDUCIAL, SHIFTS, sacc_data, seed=SEED,
+                            theory_fn=theory_fn, debug=True)
+    np.testing.assert_array_equal(
+        cdv.calculate_concealing_factor(factor_type="add"),
+        concealing_factor(FIDUCIAL, SHIFTS, seed=SEED, theory_fn=theory_fn),
+    )
 
 
-@patch('src.smokescreen.datavector.getpass.getuser', return_value='test_user')
-def test_save_concealed_datavector_default_suffix(mock_getuser):
-    cosmo = COSMO
-    likelihood = "./examples/cosmic_shear/cosmicshear_likelihood.py"
-    syst_dict = {
-        "trc1_delta_z": 0.1,
-        "trc0_delta_z": 0.1,
-    }
-    shift_dict = {"Omega_c": 0.34, "sigma8": 0.85}
-    sacc_data, _ = load_sacc_file("./examples/cosmic_shear/cosmicshear_sacc.fits")
-    sck = ConcealDataVector(cosmo, likelihood, shift_dict, sacc_data, syst_dict, seed=1234)
-    sck.calculate_concealing_factor()
-    sck.apply_concealing_to_likelihood_datavec()
+def test_class_evaluates_each_theory_point_once(sacc_data):
+    calls = []
+    base = np.arange(1, 6, dtype=float)
 
-    temp_file_path = "./tests/"
-    temp_file_root = "temp_sacc_default_suffix"
+    def counting_theory_fn(p):
+        calls.append(dict(p))
+        return base * p["sigma8"] + p["Omega_c"]
 
-    sck.save_concealed_datavector(temp_file_path, temp_file_root)
-
-    expected_path = f"{temp_file_path}{temp_file_root}_concealed_data_vector.fits"
-    assert os.path.exists(expected_path)
-
-    os.remove(expected_path)
+    cdv = ConcealDataVector(FIDUCIAL, SHIFTS, sacc_data, seed=SEED,
+                            theory_fn=counting_theory_fn)
+    cdv.calculate_concealing_factor(factor_type="add")
+    cdv.calculate_concealing_factor(factor_type="mult")
+    # fiducial and hidden, once each — delegating the factor must not make the
+    # adapter pay for repeated theory evaluations
+    assert len(calls) == 2
 
 
-def test_flat_distribution_and_deterministic_blinding_equivalence(cosmic_shear_resources):
+def test_class_draws_the_hidden_point_once(sacc_data, theory_fn):
+    # The class owns its draw: mutating the caller's shifts_dict afterwards
+    # must not move the factor, or theory_vec_conceal and the factor would
+    # silently describe different hidden points.
+    mutable = dict(SHIFTS)
+    cdv = ConcealDataVector(FIDUCIAL, mutable, sacc_data, seed=SEED,
+                            theory_fn=theory_fn, debug=True)
+    mutable["sigma8"] = 10.0
+    mutable["Omega_c"] = 10.0
+
+    factor = cdv.calculate_concealing_factor(factor_type="add")
+    np.testing.assert_array_equal(
+        factor,
+        concealing_factor(FIDUCIAL, SHIFTS, seed=SEED, theory_fn=theory_fn),
+    )
+    # and the exposed hidden-point theory is the one the factor was built from
+    np.testing.assert_array_equal(factor,
+                                  cdv.theory_vec_conceal - cdv.theory_vec_fid)
+
+
+def test_rejected_factor_type_leaves_the_object_untouched(sacc_data, theory_fn):
+    cdv = ConcealDataVector(FIDUCIAL, SHIFTS, sacc_data, seed=SEED,
+                            theory_fn=theory_fn, debug=True)
+    good = cdv.calculate_concealing_factor(factor_type="add")
+
+    with pytest.raises(NotImplementedError):
+        cdv.calculate_concealing_factor(factor_type="subtract")
+
+    assert cdv.factor_type == "add"
+    np.testing.assert_array_equal(cdv.apply_concealing_to_likelihood_datavec(),
+                                  sacc_data.mean + good)
+
+
+# --- construction & length guard --------------------------------------------
+
+def test_construction_succeeds(sacc_data, theory_fn):
+    cdv = ConcealDataVector(FIDUCIAL, SHIFTS, sacc_data, seed=SEED,
+                            theory_fn=theory_fn)
+    assert isinstance(cdv, ConcealDataVector)
+
+
+def test_length_guard_raises(sacc_data):
+    wrong = lambda p: np.ones(3)  # noqa: E731  -- wrong length
+    with pytest.raises(ValueError):
+        ConcealDataVector(FIDUCIAL, SHIFTS, sacc_data, seed=SEED, theory_fn=wrong)
+
+
+def test_shape_guard_rejects_column_vector(sacc_data):
+    # (n, 1) has len() == n but would broadcast mean(n,) + factor(n,1) into an
+    # (n, n) matrix — must be rejected, not silently corrupt the blinded SACC
+    wrong = lambda p: np.ones((5, 1))  # noqa: E731
+    with pytest.raises(ValueError, match="shape"):
+        ConcealDataVector(FIDUCIAL, SHIFTS, sacc_data, seed=SEED, theory_fn=wrong)
+
+
+def test_unknown_shift_key_raises(sacc_data, theory_fn):
+    # a typo'd shift key must fail loudly at construction
+    with pytest.raises(ValueError, match="omega_c"):
+        ConcealDataVector(FIDUCIAL, {"omega_c": 0.05}, sacc_data,
+                          seed=SEED, theory_fn=theory_fn)
+
+
+def test_unknown_keyword_raises(sacc_data, theory_fn):
+    # a swallowed `theory_fn` typo would silently fall back to the default CCL
+    # backend — blinding with one theory and unblinding with another
+    with pytest.raises(TypeError):
+        ConcealDataVector(FIDUCIAL, SHIFTS, sacc_data, seed=SEED,
+                          theory_func=theory_fn)
+
+
+def test_seed_is_required(sacc_data, theory_fn):
+    # custody contract: no default seed — omitting it must be a TypeError
+    with pytest.raises(TypeError):
+        ConcealDataVector(FIDUCIAL, SHIFTS, sacc_data, theory_fn=theory_fn)
+
+
+# --- concealing factor (add) bit-for-bit ------------------------------------
+
+def test_concealing_factor_add_bit_for_bit(sacc_data, theory_fn):
+    # debug mode returns the factor; compare bit-for-bit to an independent recompute
+    cdv_dbg = ConcealDataVector(FIDUCIAL, SHIFTS, sacc_data, seed=SEED,
+                                theory_fn=theory_fn, debug=True)
+    factor = cdv_dbg.calculate_concealing_factor(factor_type="add")
+
+    deltas = draw_param_shifts(SHIFTS, SEED, shift_distr="flat")
+    concealed = {k: FIDUCIAL[k] + deltas.get(k, 0.0) for k in FIDUCIAL}
+    expected = theory_fn(concealed) - theory_fn(FIDUCIAL)
+    np.testing.assert_array_equal(factor, expected)
+
+
+def test_apply_add_returns_mean_plus_factor(sacc_data, theory_fn):
+    cdv = ConcealDataVector(FIDUCIAL, SHIFTS, sacc_data, seed=SEED,
+                            theory_fn=theory_fn, debug=True)
+    factor = cdv.calculate_concealing_factor(factor_type="add")
+    blinded = cdv.apply_concealing_to_likelihood_datavec()
+    np.testing.assert_array_equal(blinded, sacc_data.mean + factor)
+
+
+# --- concealing factor (mult) -----------------------------------------------
+
+def test_concealing_factor_mult(sacc_data, theory_fn):
+    cdv = ConcealDataVector(FIDUCIAL, SHIFTS, sacc_data, seed=SEED,
+                            theory_fn=theory_fn, debug=True)
+    factor = cdv.calculate_concealing_factor(factor_type="mult")
+
+    deltas = draw_param_shifts(SHIFTS, SEED, shift_distr="flat")
+    concealed = {k: FIDUCIAL[k] + deltas.get(k, 0.0) for k in FIDUCIAL}
+    expected = theory_fn(concealed) / theory_fn(FIDUCIAL)
+    np.testing.assert_array_equal(factor, expected)
+
+    blinded = cdv.apply_concealing_to_likelihood_datavec()
+    np.testing.assert_array_equal(blinded, sacc_data.mean * factor)
+
+
+# --- save path --------------------------------------------------------------
+
+def _blinded_cdv(sacc_data, theory_fn):
+    cdv = ConcealDataVector(FIDUCIAL, SHIFTS, sacc_data, seed=SEED,
+                            theory_fn=theory_fn)
+    cdv.calculate_concealing_factor(factor_type="add")
+    cdv.apply_concealing_to_likelihood_datavec()
+    return cdv
+
+
+def test_save_fits_and_cov_unchanged(tmp_path, sacc_data, theory_fn, monkeypatch):
+    monkeypatch.setattr("smokescreen.datavector.getpass.getuser",
+                        lambda: "test_user")
+    cov_before = sacc_data.covariance.dense.copy()
+    cdv = _blinded_cdv(sacc_data, theory_fn)
+
+    out = cdv.save_concealed_datavector(str(tmp_path), "root", return_sacc=True)
+    assert isinstance(out, sacc.Sacc)
+    np.testing.assert_array_equal(out.mean, cdv.concealed_data_vector)
+    np.testing.assert_allclose(out.covariance.dense, cov_before)
+    # input SACC covariance untouched too
+    np.testing.assert_allclose(sacc_data.covariance.dense, cov_before)
+
+    md = out.metadata
+    assert md["concealed"] is True
+    assert md["creator"] == "test_user"
+    assert "info" in md
+
+    assert (tmp_path / "root_concealed_data_vector.fits").exists()
+
+
+def test_save_commits_to_seed_without_revealing_it(tmp_path, sacc_data, theory_fn):
+    # the concealed file is what circulates while the analysis is blind; the
+    # seed plus the (public) config would unblind it, so only a commitment goes in
+    cdv = _blinded_cdv(sacc_data, theory_fn)
+    md = cdv.save_concealed_datavector(str(tmp_path), "root",
+                                       return_sacc=True).metadata
+
+    assert "seed_smokescreen" not in md
+    assert md["seed_commitment"] == seed_commitment(SEED)
+    assert str(SEED) not in md["seed_commitment"]
+    assert md["draw_scheme"] == DRAW_SCHEME
+
+
+def test_save_stamp_seed_opt_in(tmp_path, sacc_data, theory_fn):
+    # upstream's behaviour remains reachable, deliberately
+    cdv = _blinded_cdv(sacc_data, theory_fn)
+    md = cdv.save_concealed_datavector(str(tmp_path), "root", return_sacc=True,
+                                       stamp_seed=True).metadata
+    assert md["seed_smokescreen"] == SEED
+    assert md["seed_commitment"] == seed_commitment(SEED)
+
+
+def test_save_return_sacc_false(tmp_path, sacc_data, theory_fn, monkeypatch):
+    monkeypatch.setattr("smokescreen.datavector.getpass.getuser",
+                        lambda: "test_user")
+    cdv = _blinded_cdv(sacc_data, theory_fn)
+    out = cdv.save_concealed_datavector(str(tmp_path), "root", return_sacc=False)
+    assert out is None
+
+
+def test_save_custom_suffix(tmp_path, sacc_data, theory_fn, monkeypatch):
+    monkeypatch.setattr("smokescreen.datavector.getpass.getuser",
+                        lambda: "test_user")
+    cdv = _blinded_cdv(sacc_data, theory_fn)
+    cdv.save_concealed_datavector(str(tmp_path), "root", suffix="mysuffix")
+    assert (tmp_path / "root_mysuffix.fits").exists()
+
+
+def test_save_hdf5_format(tmp_path, sacc_data, theory_fn, monkeypatch):
+    pytest.importorskip("h5py")  # sacc.save_hdf5 needs h5py
+    monkeypatch.setattr("smokescreen.datavector.getpass.getuser",
+                        lambda: "test_user")
+    cdv = _blinded_cdv(sacc_data, theory_fn)
+    cdv.save_concealed_datavector(str(tmp_path), "root", output_format="hdf5")
+    assert (tmp_path / "root_concealed_data_vector.hdf5").exists()
+
+
+# --- end-to-end synthetic (default backend never constructed) ---------------
+
+def test_end_to_end_synthetic(tmp_path, sacc_data, theory_fn, monkeypatch):
+    monkeypatch.setattr("smokescreen.datavector.getpass.getuser",
+                        lambda: "test_user")
+    cdv = ConcealDataVector(FIDUCIAL, SHIFTS, sacc_data, seed=SEED,
+                            theory_fn=theory_fn)
+    cdv.calculate_concealing_factor(factor_type="add")
+    blinded = cdv.apply_concealing_to_likelihood_datavec()
+    out = cdv.save_concealed_datavector(str(tmp_path), "root", return_sacc=True)
+    assert not np.array_equal(blinded, sacc_data.mean)  # actually blinded
+    # Import discipline (pyccl never entering sys.modules on the synthetic path)
+    # is covered by the subprocess suite in test_import_discipline.py.
+    assert isinstance(out, sacc.Sacc)
+
+
+# --- default CCL backend ----------------------------------------------------
+
+CS_THETAS = np.array([5.0, 20.0, 60.0, 120.0])  # arcmin
+CS_ELLS = np.array([50, 200, 800])
+CS_PAIRS = [("src0", "src0"), ("src0", "src1"), ("src1", "src1")]
+
+
+def _make_cosmic_shear_sacc():
+    """Small cosmic-shear SACC with 2 NZ tracers, xi± and cl_ee rows.
+
+    Every row carries a distinct value: a constant-valued fixture would let a
+    permuted or mis-scattered theory vector pass unnoticed.
     """
-    Test that blinding from a flat distribution with a given seed produces the same
-    data vector as blinding deterministically with the registered sampled shifts.
+    s = sacc.Sacc()
+    z = np.linspace(0.05, 2.0, 50)
+    for name, zmean in [("src0", 0.5), ("src1", 1.0)]:
+        nz = np.exp(-0.5 * ((z - zmean) / 0.2) ** 2)
+        s.add_tracer("NZ", name, z, nz)
+    for k, dt in enumerate(("galaxy_shear_xi_plus", "galaxy_shear_xi_minus")):
+        for j, p in enumerate(CS_PAIRS):
+            for th in CS_THETAS:
+                s.add_data_point(dt, p, 1e-6 * (1 + j + 3 * k) * (5.0 / th),
+                                 theta=th)
+    for j, p in enumerate(CS_PAIRS):
+        for ell in CS_ELLS:
+            s.add_data_point("galaxy_shear_cl_ee", p, 1e-9 * (1 + j) * (50.0 / ell),
+                             ell=ell)
+    n = len(s.mean)
+    s.add_covariance(np.eye(n) * 1e-12)
+    return s
+
+
+def _recompute_xi_plus(s, params, pair):
+    """ξ+ for one tracer pair, computed straight from CCL — no Smokescreen."""
+    import pyccl as ccl
+
+    cosmo = ccl.Cosmology(transfer_function="eisenstein_hu",
+                          matter_power_spectrum="halofit", **params)
+    tracers = [
+        ccl.WeakLensingTracer(cosmo, dndz=(s.tracers[name].z, s.tracers[name].nz))
+        for name in pair
+    ]
+    ell_grid = np.unique(np.geomspace(2, 30000, 512).astype(int))
+    cl = ccl.angular_cl(cosmo, tracers[0], tracers[1], ell_grid)
+    return ccl.correlation(cosmo, ell=ell_grid, C_ell=cl,
+                           theta=CS_THETAS / 60.0, type="GG+")
+
+
+def test_default_ccl_backend(tmp_path, monkeypatch):
+    pytest.importorskip("pyccl")
+    monkeypatch.setattr("smokescreen.datavector.getpass.getuser",
+                        lambda: "test_user")
+    s = _make_cosmic_shear_sacc()
+    cov_before = s.covariance.dense.copy()
+    fiducial = {"sigma8": 0.81, "Omega_c": 0.26, "Omega_b": 0.045,
+                "h": 0.67, "n_s": 0.96}
+    shifts = {"sigma8": 0.05, "Omega_c": (-0.03, 0.03)}
+
+    cdv = ConcealDataVector(fiducial, shifts, s, seed=SEED, theory_fn=None)
+    assert np.all(np.isfinite(cdv.theory_vec_fid))
+    # the Cl branch (np.interp over the ell grid) must produce real power
+    cl_idx = s.indices("galaxy_shear_cl_ee")
+    assert np.all(cdv.theory_vec_fid[cl_idx] > 0)
+    cdv.calculate_concealing_factor(factor_type="add")
+    blinded = cdv.apply_concealing_to_likelihood_datavec()
+    assert not np.array_equal(blinded, s.mean)
+
+    out = cdv.save_concealed_datavector(str(tmp_path), "cs", return_sacc=True)
+    np.testing.assert_allclose(out.covariance.dense, cov_before)
+
+
+def test_default_ccl_backend_rows_align():
+    """The backend's whole job: theory_vec_fid[i] is the theory for row i.
+
+    A permuted theory vector, a ξ+/ξ− branch swap, or a degrees-for-arcmin
+    reading of the theta tag all still produce a smooth, plausible-looking
+    blind, so this is pinned structurally: one ξ+ block is recomputed straight
+    from CCL and compared row for row.
     """
-    cosmo = COSMO
-    likelihood = cosmic_shear_resources['likelihood']
-    syst_dict = {
-        "trc1_delta_z": 0.1,
-        "trc0_delta_z": 0.1,
-    }
-    seed = 1234
-    # Distribution-based shifts: sample Omega_c and sigma8 from uniform ranges
-    distribution_shifts_dict = {"Omega_c": (0.20, 0.39), "sigma8": (0.6, 0.9)}
+    pytest.importorskip("pyccl")
+    s = _make_cosmic_shear_sacc()
+    fiducial = {"sigma8": 0.81, "Omega_c": 0.26, "Omega_b": 0.045,
+                "h": 0.67, "n_s": 0.96}
 
-    # Step 1: Create smokescreen with distribution-based shifts and get blinded data vector
-    sacc_data = sacc.Sacc.load_fits(cosmic_shear_resources['fits_sacc'])
-    sck_distribution = ConcealDataVector(cosmo, likelihood,
-                                         distribution_shifts_dict, sacc_data,
-                                         syst_dict, seed=seed)
-    sck_distribution.calculate_concealing_factor()
-    blinded_dv_distribution = sck_distribution.apply_concealing_to_likelihood_datavec()
+    cdv = ConcealDataVector(fiducial, {"sigma8": 0.05}, s, seed=SEED,
+                            theory_fn=None)
 
-    # Step 2: Register the sampled shift values by re-running the draw with the same seed
-    sampled_shifts = sck_distribution._load_shifts(seed=seed)
+    idx = s.indices("galaxy_shear_xi_plus", ("src0", "src0"))
+    np.testing.assert_allclose(cdv.theory_vec_fid[idx],
+                               _recompute_xi_plus(s, fiducial, ("src0", "src0")),
+                               rtol=1e-10)
 
-    # Step 3: Create smokescreen with deterministic shifts equal to the registered sample values
-    sacc_data2 = sacc.Sacc.load_fits(cosmic_shear_resources['fits_sacc'])
-    sck_deterministic = ConcealDataVector(cosmo, likelihood,
-                                          sampled_shifts, sacc_data2,
-                                          syst_dict, seed=seed)
-    sck_deterministic.calculate_concealing_factor()
-    blinded_dv_deterministic = sck_deterministic.apply_concealing_to_likelihood_datavec()
-
-    # Step 4: Both strategies must produce the same blinded data vector
-    np.testing.assert_array_almost_equal(blinded_dv_distribution, blinded_dv_deterministic)
-
-
-def test_gaussian_distribution_and_deterministic_blinding_equivalence(cosmic_shear_resources):
-    """
-    Test that blinding from a Gaussian distribution with a given seed produces the same
-    data vector as blinding deterministically with the registered sampled shifts.
-    """
-    cosmo = COSMO
-    likelihood = cosmic_shear_resources['likelihood']
-    syst_dict = {
-        "trc1_delta_z": 0.1,
-        "trc0_delta_z": 0.1,
-    }
-    seed = 1234
-    # Gaussian distribution shifts: (mean, std) tuples
-    distribution_shifts_dict = {"Omega_c": (0.3, 0.02), "sigma8": (0.82, 0.02)}
-
-    # Step 1: Create smokescreen with Gaussian distribution shifts and get blinded data vector
-    sacc_data = sacc.Sacc.load_fits(cosmic_shear_resources['fits_sacc'])
-    sck_distribution = ConcealDataVector(cosmo, likelihood,
-                                         distribution_shifts_dict, sacc_data,
-                                         syst_dict, seed=seed,
-                                         **{'shift_distr': 'gaussian'})
-    sck_distribution.calculate_concealing_factor()
-    blinded_dv_distribution = sck_distribution.apply_concealing_to_likelihood_datavec()
-
-    # Step 2: Register the sampled shift values by re-running the Gaussian draw with the same seed
-    sampled_shifts = sck_distribution._load_shifts(seed=seed, shift_distr='gaussian')
-
-    # Step 3: Create smokescreen with deterministic shifts equal to the registered sample values
-    sacc_data2 = sacc.Sacc.load_fits(cosmic_shear_resources['fits_sacc'])
-    sck_deterministic = ConcealDataVector(cosmo, likelihood,
-                                          sampled_shifts, sacc_data2,
-                                          syst_dict, seed=seed)
-    sck_deterministic.calculate_concealing_factor()
-    blinded_dv_deterministic = sck_deterministic.apply_concealing_to_likelihood_datavec()
-
-    # Step 4: Both strategies must produce the same blinded data vector
-    np.testing.assert_array_almost_equal(blinded_dv_distribution, blinded_dv_deterministic)
+    # ξ+ falls with θ over 5–120 arcmin: a shuffled block would not
+    xi_plus = cdv.theory_vec_fid[idx]
+    assert np.all(np.diff(xi_plus) < 0)
+    # ξ− is a different transform of the same Cℓ, not a copy of ξ+
+    minus_idx = s.indices("galaxy_shear_xi_minus", ("src0", "src0"))
+    assert np.all(cdv.theory_vec_fid[minus_idx] < xi_plus)
