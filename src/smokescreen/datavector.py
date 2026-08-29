@@ -371,16 +371,13 @@ class ConcealDataVector():
         Save the concealed (blinded) data vector to a SACC file.
 
         The blinded vector overwrites the mean of a deep copy of ``sacc_data``;
-        the covariance is carried over unchanged (blinding shifts the mean and
-        never touches the covariance). Metadata is stamped with the concealed
-        flag, creator, timestamp, a *commitment* to the seed --- a
-        domain-separated sha256 digest, not the seed itself, see
-        :func:`~smokescreen.param_shifts.seed_commitment` --- and the
-        :data:`~smokescreen.param_shifts.DRAW_SCHEME` the shifts were drawn
-        under, so an unblind attempt with
-        different draw semantics can be refused rather than silently subtract
-        the wrong shift. Writing goes through SACC's own ``save_fits`` /
-        ``save_hdf5``.
+        the covariance is carried over unchanged. Metadata is stamped with the
+        concealed flag, creator, timestamp,
+        :func:`~smokescreen.param_shifts.seed_commitment` (a digest, not the
+        seed), and :data:`~smokescreen.param_shifts.DRAW_SCHEME`, so an
+        unblind attempt with different draw semantics can be refused rather
+        than silently subtract the wrong shift. Writing goes through SACC's
+        own ``save_fits`` / ``save_hdf5``.
 
         Parameters
         ----------
@@ -398,10 +395,9 @@ class ConcealDataVector():
             'concealed_data_vector'.
         stamp_seed : bool
             If True, additionally stamp the raw seed as ``seed_smokescreen``,
-            as upstream Smokescreen does. Default False: the concealed file is
-            the artifact that circulates while the analysis is blind, and the
-            seed plus the (public) config is enough to reconstruct the shift
-            and unblind it.
+            as upstream Smokescreen does. Default False: the seed plus the
+            (public) config is enough to reconstruct the shift, so the file
+            that circulates while blind should not carry it.
 
         Returns
         -------
