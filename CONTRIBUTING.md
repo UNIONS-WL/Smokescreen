@@ -7,12 +7,7 @@ Thank you for your interest in contributing to Smokescreen! We welcome contribut
 1. **Fork the repository** and clone it locally.
 2. **Install the development dependencies**:
    ```bash
-   pip install -e ".[dev]"
-   ```
-or 
-   ```bash
-   conda env create -f environment.yml
-   conda activate desc_smokescreen
+   pip install -e ".[test]"
    ```
 3. **Create a branch** for your changes:
    ```bash
@@ -33,7 +28,7 @@ Please **open an issue** on GitHub with a clear description of the problem, a mi
    ```bash
    pytest
    ```
-2. Follow the existing code style. We use `flake8` for linting.
+2. Follow the existing code style. We use `flake8` for linting, configured in `.flake8`; CI runs it as its own job.
 3. Update the documentation and changelog where relevant.
 4. **Open an issue related to your PR**
 5. Open a pull request against the `main` branch with a clear description of your changes and the motivation behind them. Link it to the issue you opened.
@@ -44,7 +39,11 @@ Contributors are expected to adhere to a standard of respectful and inclusive co
 
 ## Scope
 
-Smokescreen is designed to be likelihood- and probe-agnostic, delegating theory calculations to [Firecrown](https://github.com/LSSTDESC/firecrown). Contributions that extend blinding support to new Firecrown likelihoods, improve interoperability, or add new blinding schemes are especially welcome.
+Smokescreen is probe- and model-agnostic. It gets its theory from a single callable, `theory_fn(cosmo_params) -> np.ndarray`, which returns a vector aligned to the rows being concealed. Any model can be a backend, so long as it fits that shape. The library ships one built-in backend, the CCL cosmic-shear backend in `src/smokescreen/backends/`, which is the default when no `theory_fn` is given.
+
+That protocol is the extension point. Contributions that add a theory backend, widen the built-in backend's data-type coverage, or add new blinding schemes are especially welcome.
+
+The firecrown path (`src/smokescreen/firecrown_datavector.py`) is not supported — see the [installation docs](docs/source/installation.rst). Build new work on `theory_fn`.
 
 ## Contact
 

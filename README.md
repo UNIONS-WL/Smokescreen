@@ -4,10 +4,9 @@
 </p>
 <div align="center">
   
-[![DESC Smokescreen](https://github.com/LSSTDESC/Smokescreen/actions/workflows/CI.yml/badge.svg)](https://github.com/LSSTDESC/Smokescreen/actions/workflows/CI.yml)
-[![Documentation](https://github.com/LSSTDESC/Smokescreen/actions/workflows/build_docs.yml/badge.svg?branch=main)](https://lsstdesc.org/Smokescreen/)
-[![codecov](https://codecov.io/gh/LSSTDESC/Smokescreen/graph/badge.svg?token=T3L9QM4PTT)](https://codecov.io/gh/LSSTDESC/Smokescreen)
-[![License: BSD 3-Clause](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](https://github.com/yourusername/yourrepository/blob/main/LICENSE)
+[![CI](https://github.com/UNIONS-WL/Smokescreen/actions/workflows/CI.yml/badge.svg)](https://github.com/UNIONS-WL/Smokescreen/actions/workflows/CI.yml)
+[![Documentation](https://github.com/UNIONS-WL/Smokescreen/actions/workflows/build_docs.yml/badge.svg?branch=main)](https://github.com/UNIONS-WL/Smokescreen/actions/workflows/build_docs.yml)
+[![License: BSD 3-Clause](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](https://github.com/UNIONS-WL/Smokescreen/blob/main/LICENSE)
 [![status](https://joss.theoj.org/papers/e878b1039a491368b19e93eb7a614e93/status.svg)](https://joss.theoj.org/papers/e878b1039a491368b19e93eb7a614e93)
 [![LSST DESC Blinding Slack](https://img.shields.io/badge/join-Slack-4A154B)](https://lsstc.slack.com/archives/CT14ZF2AH)
 
@@ -22,17 +21,23 @@ This repository (under development) contains the modules for data concealment (b
 - Posterior distribution [not yet developed]
 - (TBC) Catalogues
 
-**You can find the documentation for Smokescreen [here](https://lsstdesc.org/Smokescreen/).**
+Documentation is the Sphinx source in [`docs/source/`](docs/source) — start with
+[installation](docs/source/installation.rst) and [usage](docs/source/usage.rst).
 
-## Quick Installation
-You can install Smokescreen using conda:
+> **Note:** this is the [UNIONS-WL](https://github.com/UNIONS-WL) fork of
+> [LSSTDESC/Smokescreen](https://github.com/LSSTDESC/Smokescreen). Theory comes
+> from a `theory_fn(cosmo_params) -> np.ndarray` callable, with a built-in CCL
+> cosmic-shear backend as the default. This fork does not support the inherited
+> firecrown path — see the [installation docs](docs/source/installation.rst).
+
+## Installation
 ```bash
-conda install -c conda-forge lsstdesc-smokescreen
+pip install git+https://github.com/UNIONS-WL/Smokescreen@<tag>
 ```
 
-For developer installation or other instructions check the [documentation](https://lsstdesc.org/Smokescreen/installation.html).
+For developer installation and other instructions see [`docs/source/installation.rst`](docs/source/installation.rst).
 
-For questions contact @arthurmloureiro, @jessmuir, or @jablazek
+For questions about the upstream package contact @arthurmloureiro, @jessmuir, or @jablazek
 
 ---
 

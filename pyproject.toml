@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
@@ -17,21 +17,23 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "numpy>=2.2.0",
-    "scipy>=1.9.0",
     "astropy>=5.2.0",
-    "pytest>=7.2.5",
-    "sacc>=0.12",
-    #"pyccl>=3.0.2",
+    "cryptography",
+    "h5py",
     "jsonargparse[signatures]>=4.0",
-    "pytest",
-    "pytest-cov",
-    "cryptography"
+    "numpy>=2.2.0",
+    "pyccl",
+    "sacc>=0.12",
+    "scipy>=1.9.0",
 ]
-keywords = ["desc", "python", "blinding", "firecrown", "cosmology"]
+keywords = ["desc", "python", "blinding", "cosmology"]
 dynamic = ["version"]
 
 [project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-cov",
+]
 docs = [
     "sphinx>=7.3.0",
     "sphinxcontrib.datatemplates",
@@ -39,18 +41,9 @@ docs = [
     "sphinx_rtd_theme",
 ]
 
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.flake8]
-max-line-length = 120
-
 [project.urls]
-Homepage = "https://github.com/LSSTDESC/Smokescreen"
-Issues = "https://github.com/LSSTDESC/Smokescreen/issues"
-
-# [tool.hatch]
-# version.source = "vcs"
+Homepage = "https://github.com/UNIONS-WL/Smokescreen"
+Issues = "https://github.com/UNIONS-WL/Smokescreen/issues"
 
 [tool.hatch.version]
 path = "src/smokescreen/_version.py"

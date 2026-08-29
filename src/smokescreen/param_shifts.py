@@ -82,12 +82,9 @@ def _normalize_seed(seed):
 
 
 COMMITMENT_DOMAIN = b"smokescreen-seed-commitment-v1|"
-"""Domain-separation prefix hashed ahead of the seed by :func:`seed_commitment`.
-
-It keeps the commitment digest in a different hash domain from
-``_normalize_seed``, which derives the RNG base seed from the *undomained*
-sha256 of the same string. Without the prefix the two digests coincide and the
-first 16 hex characters of the commitment are the base seed itself.
+"""Prefix hashed ahead of the seed by :func:`seed_commitment`, so the
+commitment digest never coincides with the ``_normalize_seed`` digest ---
+without it, the commitment's first 16 hex characters *are* the RNG base seed.
 """
 
 
@@ -95,26 +92,14 @@ def seed_commitment(seed):
     """
     Public commitment to a seed: a domain-separated sha256 digest of it.
 
-    Safe to publish alongside a blinded product. It ties the product to the
-    blind that produced it --- a later-revealed seed either matches the
-    commitment or it does not --- without revealing the seed while the analysis
-    is still blind.
+    Publish this alongside a blinded product instead of the seed: it ties the
+    product to the blind that produced it --- a later-revealed seed either
+    matches the commitment or it does not. The :data:`COMMITMENT_DOMAIN`
+    prefix keeps the digest disjoint from the RNG seed derivation in
+    ``_normalize_seed``.
 
     An ``int`` seed is committed as ``str(seed)``, so ``2112`` and ``"2112"``
     commit identically.
-
-    The commitment is safe to publish under two conditions, both load-bearing:
-
-    - **Domain separation.** The digest is taken over
-      :data:`COMMITMENT_DOMAIN` followed by the seed, *not* over the bare seed.
-      ``_normalize_seed`` derives the RNG base seed from the bare sha256 of
-      the same string, so an undomained commitment would carry that base seed
-      verbatim in its first 16 hex characters and the blind would be
-      recoverable from the artifact meant to protect it.
-    - **An unguessable seed.** The digest conceals the seed only to the extent
-      that the seed has entropy: a small integer is trivially brute-forced from
-      its digest, so choose a high-entropy seed (e.g.
-      ``secrets.token_hex(16)``).
 
     Parameters
     ----------

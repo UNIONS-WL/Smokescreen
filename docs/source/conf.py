@@ -36,7 +36,6 @@ html_logo = '_static/bkp_logo.png'
 # These are options specifically for the Wagtail Theme.
 # more info here: https://sphinx-wagtail-theme.readthedocs.io/en/latest/index.html
 html_theme_options = {
-    'display_version': True,
     'titles_only': False,
     'sticky_navigation': True,
     'navigation_depth': 4,

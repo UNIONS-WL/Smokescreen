@@ -1,213 +1,324 @@
 Usage
 ======
 
-Currently, only data vector concealment is implemented in Smokescreen. Posterior-level concealment is under development.
+Currently, only data vector concealment is implemented in Smokescreen.
+Posterior-level concealment is under development.
 
 Data Vector Concealment (blinding)
 -----------------------------------
 
-The `Smokescreen` library provides a method for blinding data vectors. This method is based on the `Muir et al. (2021) <https://arxiv.org/abs/1911.05929>`_ data-vector blinding method.
+Smokescreen conceals a data vector by adding a theory difference to it,
+following the `Muir et al. (2019) <https://arxiv.org/abs/1911.05929>`_ method:
 
-To conceal a data-vector you need the following elements:
+.. math::
 
-* A CCL cosmology object
+   d \rightarrow d + t(\theta_{\rm hidden}) - t(\theta_{\rm fid})
 
-* A dictionary of the nuisance parameters used in the likelihood (soon to be deprecated)
+The hidden point is the fiducial point plus a secret, seeded parameter shift.
+Anyone who knows the seed and the (public) configuration can reconstruct the
+shift and unblind; anyone who does not, cannot.
 
-* A Firecrown Likelihood, which takes a SACC data-vector (see more below). It can be either a path to the python file containing the likelihood or the module itself.
+To conceal a data vector you need four things:
 
-* A dictionary of cosmological parameters to be shifted in the format:
-    
-      .. code-block:: python
+* **Fiducial parameters** --- a plain mapping of parameter name to value.
+  With the default backend these are CCL-native names, e.g.
+  ``{"sigma8": 0.8, "Omega_c": 0.25, "Omega_b": 0.05, "h": 0.67, "n_s": 0.96}``.
+  This is a mapping, not a ``pyccl.Cosmology`` object.
 
-        # for a random uniform parameter shift:
-        {'PARAM_Y': (Y_MIN, Y_MAX), 'PARAM_Z': (Z_MIN, Z_MAX)}
-        # or for a determinist shift (used for debugging):
-        {'PARAM_Y': Y_VALUE, 'PARAM_Z': Z_VALUE}
+* **A shifts dictionary** --- the envelope each shifted parameter is drawn
+  from. See `Shift envelopes`_ below.
 
-        # for a Gaussian parameter shift:
-        {'PARAM_Y': (MEAN_Y, STD_Y), 'PARAM_Z': (MEAN_Z, STD_Z)}
+* **A SACC data vector** --- containing exactly the rows to be concealed.
 
-* A SACC data-vector
+* **A seed** --- an ``int`` or ``str``. It is keyword-only and has no default:
+  blinding custody depends on the seed being a deliberate, secret choice.
 
-* A random seed as int or string
+Theory comes from a single callable, ``theory_fn(cosmo_params) -> np.ndarray``.
+When you do not supply one, the built-in CCL cosmic-shear backend is built from
+your SACC file.
 
-.. attention::
-   **Likelihood Requirements**
+Shift envelopes
+~~~~~~~~~~~~~~~~
 
-   The blinding module requires the Firecrown likelihood to be built with certain requirements. First, we must be able to build the likelihood by providing a `sacc <https://github.com/LSSTDESC/sacc/tree/master>`_ object with the measurements for the data-vector:
+Every value in ``shifts_dict`` is a **delta about zero**, added to the fiducial
+value. It is not an absolute parameter value and not a range of parameter
+values.
 
-    .. code-block:: python
+.. code-block:: python
 
-        def build_likelihood(build_parameters):
-            """
-            This is a generic likelihood theory model 
-            for a generic data vector.
-            """
-            sacc_data = build_parameters['sacc_data']
+   # symmetric delta envelope: the drawn delta lies in (-0.05, +0.05),
+   # so the hidden sigma8 lies in (fid - 0.05, fid + 0.05)
+   {"sigma8": 0.05}
 
-    This is simular to what is currently done in `TXPipe <https://github.com/LSSTDESC/TXPipe/blob/df0dcc8c1e974576dd1942624ab5ff7bd0fbbaa0/txpipe/utils/theory_model.py#L19>`_.
+   # explicit delta box: the drawn delta lies in [lo, hi]
+   {"Omega_c": (-0.03, 0.05)}
 
-    The likelihood module also must have a method ``.compute_theory_vector(ModellingTools)`` which calls for the calculation of the theory vector inside the likelihood object. 
+   # gaussian draws take only the float form; the value is the sigma of a
+   # zero-mean gaussian delta
+   {"sigma8": 0.02}   # with shift_distr="gaussian"
 
-.. danger::
-    **Likelihoods with hardcoded sacc files:**
+Every key of ``shifts_dict`` must also be a key of ``fiducial_params``;
+construction raises ``ValueError`` if one is not.
 
-    If you provide a Firecrown likelihood with a hardcoded path to a sacc file as the data-vector, **Smokescreen will conceal the hardcoded sacc file and not the one you provided**. This is because the likelihood is built with the hardcoded path. Firecrown currently has not checks to avoid a hardcoded sacc file in the ``build_likelihood(...)`` function. To avoid this, please build the likelihood as described above.
+Draws are **per-key independent**: the delta for a key depends only on
+``(key, seed, shift_distr)``, never on the other keys present or on the
+iteration order of the mapping. These semantics are versioned by
+:data:`smokescreen.param_shifts.DRAW_SCHEME`, which is stamped into every
+blinded file.
 
-The likelihood can be provided either as a path to the python file containing the ``build_likelihood`` function or as a python module. In the latter case, the module must be imported.
+From a notebook or your code
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-TL;DR: Check the `Smokescreen notebooks folder <https://github.com/LSSTDESC/Smokescreen/tree/main/notebooks>`_ for a couple of examples.
+.. code-block:: python
+
+   from smokescreen import ConcealDataVector
+   from smokescreen.utils import load_sacc_file
+
+   sacc_data, input_format = load_sacc_file("cosmicshear_sacc.fits")
+
+   fiducial_params = {"sigma8": 0.8, "Omega_c": 0.25,
+                      "Omega_b": 0.05, "h": 0.67, "n_s": 0.96}
+   shifts_dict = {"sigma8": 0.05, "Omega_c": (-0.03, 0.05)}
+
+   smoke = ConcealDataVector(fiducial_params, shifts_dict, sacc_data,
+                             seed="a-high-entropy-secret",
+                             input_format=input_format)
+
+   smoke.calculate_concealing_factor()          # factor_type="add" by default
+   concealed_dv = smoke.apply_concealing_to_likelihood_datavec()
+
+   smoke.save_concealed_datavector("./output", "cosmicshear_sacc")
+
+Everything after ``sacc_data`` is keyword-only; see
+:class:`~smokescreen.datavector.ConcealDataVector` in the API reference for the
+full signature. ``shift_distr`` is ``"flat"`` (default) or ``"gaussian"``, and
+``calculate_concealing_factor`` takes ``factor_type="add"`` (default) or
+``"mult"``, which divides rather than subtracts. With ``debug=True`` the drawn
+shifts are printed and ``calculate_concealing_factor`` returns the factor.
+
+The concealing factor alone
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:func:`~smokescreen.datavector.concealing_factor` returns the concealing factor
+alone and never touches a SACC file. Reach for it when you hold your own data
+container --- for example a pipeline that blinds selected rows of a larger
+file:
+
+.. code-block:: python
+
+   from smokescreen import concealing_factor
+
+   factor = concealing_factor(fiducial_params, shifts_dict,
+                              seed="a-high-entropy-secret",
+                              theory_fn=my_theory_fn)
+   blinded = my_data_vector + factor
+
+Here ``theory_fn`` is required and keyword-only; this call path does not import
+``pyccl``.
+
+If you have already drawn the hidden point yourself, use
+:func:`~smokescreen.datavector.factor_from_params` instead: no seed and no
+draw, just the two theory evaluations and their combination.
+
+.. code-block:: python
+
+   from smokescreen import factor_from_params
+   from smokescreen.param_shifts import draw_param_shifts
+
+   shifts = draw_param_shifts(shifts_dict, seed="a-high-entropy-secret")
+   concealed = {k: v + shifts.get(k, 0.0) for k, v in fiducial_params.items()}
+   factor = factor_from_params(fiducial_params, concealed,
+                               theory_fn=my_theory_fn)
+
+The default CCL backend and its SACC contract
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When ``theory_fn`` is ``None``,
+:class:`~smokescreen.datavector.ConcealDataVector` builds the default backend
+with :func:`smokescreen.backends.ccl.build_ccl_theory_fn`. That backend imposes
+a contract on the SACC file:
+
+* It models **cosmic shear only** --- data types ``galaxy_shear_cl_ee``,
+  ``galaxy_shear_xi_plus`` and ``galaxy_shear_xi_minus``. Any other data type
+  in the file raises; supply your own ``theory_fn`` for such a SACC.
+
+* Every tracer used by those rows must carry a redshift distribution
+  (``z``/``nz``); the backend builds one ``pyccl.WeakLensingTracer`` per bin.
+
+* The returned vector is aligned element-for-element to ``sacc_data.mean``, and
+  the class enforces this: a ``theory_fn`` whose output shape does not match
+  raises ``ValueError``. Extract first, then blind --- scope the SACC to the
+  block you intend to conceal before construction.
+
+Two conventions the backend assumes and does not verify:
+
+* The ``theta`` tag of ``xi_plus``/``xi_minus`` rows is read as
+  **arcminutes** and converted to degrees for ``pyccl.correlation``.
+  Angular power spectra are computed once on an internal 512-point log-spaced
+  grid over :math:`\ell \in [2, 30000]`; ``galaxy_shear_cl_ee`` rows are
+  linearly interpolated from that grid onto their ``ell`` tag rather than
+  evaluated at it.
+
+* The cosmology defaults to ``transfer_function="eisenstein_hu"`` and
+  ``matter_power_spectrum="halofit"``, so the backend runs against a bare
+  ``pyccl`` install with no Boltzmann code. Both are overridable by putting
+  them in ``fiducial_params``. For a Boltzmann-code power spectrum, supply your
+  own ``theory_fn``.
+
+Supplying your own theory backend
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Any callable that takes a parameter mapping and returns a 1-D vector aligned to
+``sacc_data.mean`` is a valid backend. Systematics, tracer choices and nuisance
+parameters are closed over inside it:
+
+.. code-block:: python
+
+   def my_theory_fn(cosmo_params):
+       # ... your own model, using whatever machinery you like ...
+       return theory_vector      # 1-D, aligned to sacc_data.mean
+
+   smoke = ConcealDataVector(fiducial_params, shifts_dict, sacc_data,
+                             seed=2112, theory_fn=my_theory_fn)
+
+The firecrown path is not supported; see :doc:`installation`.
+
+What is written to the blinded file
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:meth:`~smokescreen.datavector.ConcealDataVector.save_concealed_datavector`
+writes a deep copy of the input SACC with the blinded mean; the covariance is
+carried over untouched. The output format defaults to the detected input
+format, and the file name is ``{file_root}_{suffix}{ext}`` with ``suffix``
+defaulting to ``concealed_data_vector``. See the API reference for the full
+signature.
+
+The following metadata is stamped:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Key
+     - Meaning
+   * - ``concealed``
+     - ``True``
+   * - ``creator``, ``creation``, ``info``
+     - Who blinded the file, when, and with what
+   * - ``seed_commitment``
+     - sha256 commitment to the seed, **not** the seed
+   * - ``draw_scheme``
+     - The :data:`~smokescreen.param_shifts.DRAW_SCHEME` the shifts were drawn under
+
+.. warning::
+   The commitment conceals the seed only to the extent that the seed is
+   unguessable --- a small integer is trivially brute-forced from its digest,
+   so choose a high-entropy seed. Pass ``stamp_seed=True`` to write the raw
+   seed as ``seed_smokescreen``.
+
+``draw_scheme`` makes an unblind attempt made with an install whose draw
+semantics differ fail loudly rather than subtract the wrong shift.
 
 From the command line
 ~~~~~~~~~~~~~~~~~~~~~~
-The blinding module can be used to blind the data-vector measurements. The module can be used as follows:
 
-.. code-block:: bash
-
-   python -m smokescreen --config configuration_file.yaml
-
-From Smokescreen version 1.3.0 you should call the module as:
+The ``datavector`` subcommand blinds a cosmic-shear SACC file with the default
+CCL backend, then encrypts the original:
 
 .. code-block:: bash
 
    smokescreen datavector --config configuration_file.yaml
 
-You can find an example of a configuration file here: 
+The configuration keys are the subcommand's arguments:
 
 .. code-block:: yaml
 
     path_to_sacc: "./cosmicshear_sacc.fits"
-    likelihood_path: "./cosmicshear_likelihood.py"
-    systematics:
-        trc1_delta_z: 0.1
-        trc0_delta_z: 0.1
+    fiducial_params:
+        sigma8: 0.8
+        Omega_c: 0.25
+        Omega_b: 0.05
+        h: 0.67
+        n_s: 0.96
     shifts_dict:
-        Omega_c: [0.20, 0.42]
-        sigma8: [0.67, 0.92]
+        sigma8: 0.05
+        Omega_c: [-0.03, 0.05]
     seed: 2112
-    shift_distribution: "flat"
-    # only needed if you want a different reference cosmology
-    # than ccl.VanillaLCDM
-    reference_cosmology: 
-        sigma8: 0.85
+    shift_type: "add"                # or "mult"
+    shift_distribution: "flat"       # or "gaussian"
+    path_to_output: "./output"       # default: the input file's directory
     keep_original_sacc: true
+    # output_suffix: "concealed_data_vector"
 
-.. note::
-
-    **As of version 1.5.0 of Smokescreen, you no longer need to provide the `systematics` dictionary in the configuration file. The module will automatically extract the systematics from the firecrown likelihood's default values. Of course, you can still provide this dictionary if you want values different than the firecrown defaults**
-
-.. warning::
-
-    **By default, the original SACC file is deleted after the encryption. If you want to keep the original SACC file, you can set the `keep_original_sacc` parameter to `true` in the configuration file.**
-
-Or you can use the following command to create a template configuration file:
+A template with every argument and its default:
 
 .. code-block:: bash
 
-   python -m smokescreen --print_config > template_config.yaml
-   # or in version 1.3.0+
    smokescreen datavector --print_config > template_config.yaml
 
-Note that the `reference_cosmology` is optional. If not provided, the CCL `VanillaLCDM` reference cosmology will be the one used to compute the data vector.
-
-From a notebook/your code
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The smokescreen module can be used to blind the data-vector measurements. The module can be used as follows:
-
-.. code-block:: python
-
-   # import the module
-   import pyccl as ccl
-   from smokescreen import ConcealDataVector
-   # import the likelihood that contains the model and data vector
-   [...]
-   import my_likelihood
-
-   # create the cosmology ccl object
-   cosmo = ccl.Cosmology(Omega_c=0.27, 
-                         Omega_b=0.045, 
-                         h=0.67, 
-                         sigma8=0.8, 
-                         n_s=0.96, 
-                         transfer_function='bbks')
-   # load a sacc object with the data vector [FIXME: this is a placeholder, the sacc object should be loaded from the likelihood]
-   sacc_data = sacc.Sacc.load_fits('path/to/data_vector.sacc')
-   # create a dictionary of the necessary firecrown nuisance parameters
-   # from version 1.5.0 of Smokescreen, the systematics dictionary can be optional (more info above)
-   syst_dict = {
-               "ia_a_1": 1.0,
-               "ia_a_2": 0.5,
-               "ia_a_d": 0.5,
-               "lens0_bias": 2.0,
-               "lens0_b_2": 1.0,
-               "lens0_b_s": 1.0,
-               "lens0_mag_bias": 1.0,
-               "src0_delta_z": 0.000,
-               "lens0_delta_z": 0.000,}
-   # create the smokescreen object
-   smoke = ConcealDataVector(cosmo, sacc_data, my_likelihood, 
-                             {'Omega_c': (0.22, 0.32), 'sigma8': (0.7, 0.9)},
-                             syst_dict, 
-                             shift_distr='flat')
-   # conceals (blinds) the data vector
-   smoke.calculate_concealing_factor()
-   concealed_dv = smoke.apply_concealing_to_likelihood_datavec()
-
-   # create the smokescreen object with Gaussian shifts
-   smoke_gaussian = ConcealDataVector(cosmo, syst_dict, sacc_data, my_likelihood, 
-                                      {'Omega_c': (0.27, 0.05), 'sigma8': (0.8, 0.02)}, shift_distr='gaussian')
-   # conceals (blinds) the data vector with Gaussian shifts
-   smoke_gaussian.calculate_concealing_factor()
-   concealed_dv_gaussian = smoke_gaussian.apply_concealing_to_likelihood_datavec()
-
-To encrypt the original sacc file, follow the instructions in the next section.
-
-Encryting and Decrypting SACC files
-------------------------------------
-From Smokescreen version 1.3.0, you can encrypt and decrypt SACC files. This is useful when you want to share the data vector with someone else but you don't want them to see the data. The encryption is done using the `cryptography <https://cryptography.io/en/latest/>`_ library. It is important to note that the encryption is done using a symmetric key, so the person you are sharing the data with must have the key to decrypt the file.
-
-When running the data vector concealment module, encryption is performed by default. The decryption key is saved in a file with the same name as the original file but a `.key` extension. The key is saved in the same directory as the encrypted file.
+Any key can also be given directly on the command line, e.g. ``--seed 2112``.
 
 .. warning::
+   The original SACC file is **encrypted and then deleted** by default. Set
+   ``keep_original_sacc: true`` (or ``--keep_original_sacc true``) to keep it.
+   The decryption key is written next to the output as ``{root}.key``.
 
-    **By default, the original SACC file is deleted after the encryption. If you want to keep the original SACC file, you can set the `keep_original_sacc` parameter to `true` in the configuration file or set the flag `--keep_original true` via command line**
+.. note::
+   Only the default CCL backend is reachable from the CLI, so the file must
+   satisfy that backend's contract above. A custom ``theory_fn`` requires the
+   Python API.
+
+Encrypting and Decrypting SACC files
+-------------------------------------
+
+Smokescreen can encrypt and decrypt SACC files, which is useful when you want
+to hand over a data vector without handing over the data. Encryption uses the
+`cryptography <https://cryptography.io/en/latest/>`_ library with a symmetric
+key, so whoever decrypts the file needs that key.
+
+When you run the data-vector concealment subcommand, encryption of the original
+file happens automatically. The key is saved beside the encrypted file, named
+after the original with a ``.key`` extension.
 
 Encrypting files
 ~~~~~~~~~~~~~~~~
-To encrypt a sacc file (or any file), you can use the following command:
 
 .. code-block:: bash
 
-   smokescreen encrypt --path_to_sacc path/to/sacc.fits --path_to_save path/to/save/the/file/ [--keep_original true]
+   smokescreen encrypt --path_to_sacc path/to/sacc.fits \
+       --path_to_save path/to/save/ [--keep_original true]
 
-This will generate an encrypted file with the extension `.encrpt` and a key file with the extension `.key` in the same directory as the encrypted file or in the directory specified by `--path_to_save`.
+``--path_to_save`` is an output directory and must already exist. It defaults
+to the directory holding the input file.
 
-You can also encrypt a file from a notebook/your code:
+This writes an ``.encrpt`` file and a ``.key`` file. From Python:
 
 .. code-block:: python
 
-   from smokescreen.encryption import encrypt_sacc
-   encrypt_sacc('path/to/sacc.fits', 'path/to/save/the/file/', save_file=True, keep_original=False)
+   from smokescreen.encryption import encrypt_file
+   encrypt_file('path/to/sacc.fits', 'path/to/save/',
+                save_file=True, keep_original=False)
+
+.. warning::
+   As with the CLI, the original file is deleted unless ``keep_original`` is
+   set.
 
 Decrypting files
 ~~~~~~~~~~~~~~~~
-To decrypt the file, you can use the following command:
 
 .. code-block:: bash
 
-   smokescreen decrypt --path_to_sacc [path_to_encrypted_sacc] --path_to_key [path_to_file_with_key]
+   smokescreen decrypt --path_to_sacc path/to/sacc.encrpt \
+       --path_to_key path/to/sacc.key
 
-or from a notebook/your code:
+or from Python:
 
 .. code-block:: python
 
-   from smokescreen.encryption import decrypt_sacc
-   decrypt_sacc('path/to/encrypted_sacc.encrpt', 'path/to/key.key', save_file=True)
+   from smokescreen.encryption import decrypt_file
+   decrypt_file('path/to/sacc.encrpt', 'path/to/sacc.key', save_file=True)
 
-The `save_file` parameter is optional and is set to `True` by default. If set to `False`, the decrypted file will not be saved to disk.
-
+``save_file`` defaults to ``False`` in the Python API; the decrypted bytes are
+returned either way.
 
 Posterior Concealment (blinding)
 ---------------------------------
